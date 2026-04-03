@@ -1,0 +1,18 @@
+{
+  "project_name": "rally",
+  "workspace": ".",
+  "prd": "PRD.md",
+  "max_iterations": 50,
+  "max_consecutive_failures": 3,
+  "max_retries": 0,
+  "test_command": "",
+  "model": "claude-sonnet-4-6",
+  "mode": "",
+  "docker": {
+    "image": "galph-klaudia",
+    "memory": "4g",
+    "network": "host"
+  },
+  "dry_run": false,
+  "verbose": false
+}
