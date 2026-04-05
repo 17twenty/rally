@@ -90,7 +90,13 @@ func (d *LocalToolDispatcher) execRead(ctx context.Context, params map[string]an
 	if path == "" {
 		return nil, fmt.Errorf("Read: file_path is required")
 	}
-	fullPath := filepath.Join(d.WorkspacePath, filepath.Clean(path))
+	// Support absolute paths within the container (e.g., /home/ae/scratch/...).
+	var fullPath string
+	if filepath.IsAbs(path) && strings.HasPrefix(path, "/home/ae/scratch") {
+		fullPath = filepath.Clean(path)
+	} else {
+		fullPath = filepath.Join(d.WorkspacePath, filepath.Clean(path))
+	}
 
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
@@ -146,7 +152,14 @@ func (d *LocalToolDispatcher) execWrite(ctx context.Context, params map[string]a
 		return nil, fmt.Errorf("Write: file_path is required")
 	}
 	content, _ := params["content"].(string)
-	fullPath := filepath.Join(d.WorkspacePath, filepath.Clean(path))
+
+	// Support absolute paths within the container (e.g., /home/ae/scratch/...).
+	var fullPath string
+	if filepath.IsAbs(path) && strings.HasPrefix(path, "/home/ae/scratch") {
+		fullPath = filepath.Clean(path)
+	} else {
+		fullPath = filepath.Join(d.WorkspacePath, filepath.Clean(path))
+	}
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return nil, fmt.Errorf("Write: mkdir: %w", err)

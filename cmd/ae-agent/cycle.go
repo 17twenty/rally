@@ -45,6 +45,12 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 		return fmt.Errorf("observe: %w", err)
 	}
 
+	// Use server-side model override if provided (allows dynamic model changes).
+	modelRef := c.ModelRef
+	if obs.ModelRef != "" {
+		modelRef = obs.ModelRef
+	}
+
 	// Load session state from previous cycles (if any).
 	sessionState := c.loadSessionState()
 
@@ -72,7 +78,7 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 		messages = microcompact(messages)
 
 		result, err := c.Rally.ChatLLM(ctx, ChatLLMRequest{
-			ModelRef: c.ModelRef, Messages: messages, Tools: tools, MaxTokens: 4096,
+			ModelRef: modelRef, Messages: messages, Tools: tools, MaxTokens: 4096,
 		})
 		if err != nil {
 			return fmt.Errorf("llm chat (turn %d): %w", turn+1, err)

@@ -83,8 +83,14 @@ type ProposedHireRow struct {
 
 // SettingsData holds data for the settings page (shown when company exists).
 type SettingsData struct {
-	Company        domain.Company
-	SlackConnected bool
+	Company          domain.Company
+	SlackConnected   bool
+	SlackConfigured  bool // true if SLACK_CLIENT_ID is set in env
+}
+
+// SetupWizardData holds data for the first-run setup wizard.
+type SetupWizardData struct {
+	SlackConfigured bool // true if SLACK_CLIENT_ID is set in env
 }
 
 // LogsPageData holds data for the log viewer page.

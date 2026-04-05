@@ -80,10 +80,17 @@ templ Settings(data SettingsData) {
 								@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
 									Connected
 								}
-							} else {
+							} else if data.SlackConfigured {
 								@button.Button(button.Props{Href: "/slack/install", Size: button.SizeSm, Variant: button.VariantOutline}) {
 									Connect
 								}
+							} else {
+								<div class="text-right">
+									@badge.Badge(badge.Props{Variant: badge.VariantDestructive}) {
+										Not Configured
+									}
+									<p class="text-xs text-muted-foreground mt-1">Set SLACK_CLIENT_ID in .env</p>
+								</div>
 							}
 						</div>
 

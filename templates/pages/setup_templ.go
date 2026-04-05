@@ -17,7 +17,7 @@ import (
 	"github.com/17twenty/rally/templates/layout"
 )
 
-func Setup() templ.Component {
+func Setup(data SetupWizardData) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -808,7 +808,22 @@ func Setup() templ.Component {
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "</div></div><!-- Step 4: Review and confirm --><div x-show=\"step === 4\" class=\"space-y-4\"><div class=\"rounded-md border p-4 space-y-3\"><p class=\"font-medium text-sm\">What will happen:</p><ul class=\"text-sm text-muted-foreground space-y-2 list-disc list-inside\"><li>Create your company in the database</li><li>Set your company policy (AEs will follow these guidelines)</li><li>Hire a CEO — your founding AI executive</li><li>The CEO will review the mission and propose team hires</li><li>You approve hires from the company page</li></ul><div class=\"mt-4 p-3 rounded-md bg-muted/50 text-sm\"><p class=\"font-medium\">After setup</p><p class=\"text-muted-foreground mt-1\">Visit <a href=\"/slack/install\" class=\"text-primary underline\">Settings</a> to connect Slack, Google Workspace, and other integrations.</p></div></div><div class=\"flex justify-between\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "</div></div><!-- Step 4: Review and confirm --><div x-show=\"step === 4\" class=\"space-y-4\"><div class=\"rounded-md border p-4 space-y-3\"><p class=\"font-medium text-sm\">What will happen:</p><ul class=\"text-sm text-muted-foreground space-y-2 list-disc list-inside\"><li>Create your company in the database</li><li>Set your company policy (AEs will follow these guidelines)</li><li>Hire a CEO — your founding AI executive</li><li>The CEO will review the mission and propose team hires</li><li>You approve hires from the company page</li></ul>")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					if !data.SlackConfigured {
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "<div class=\"mt-4 p-3 rounded-md bg-destructive/10 border border-destructive/20 text-sm\"><p class=\"font-medium text-destructive\">Slack Not Configured</p><p class=\"text-muted-foreground mt-1\"><code>SLACK_CLIENT_ID</code> and <code>SLACK_CLIENT_SECRET</code> are not set in your environment. Your AEs won't be able to communicate via Slack until you configure these and connect your workspace via Settings.</p><p class=\"text-muted-foreground mt-1\">See the <a href=\"https://api.slack.com/apps\" class=\"text-primary underline\" target=\"_blank\">Slack API dashboard</a> to create an app.</p></div>")
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+					} else {
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "<div class=\"mt-4 p-3 rounded-md bg-muted/50 text-sm\"><p class=\"font-medium\">After setup</p><p class=\"text-muted-foreground mt-1\">Visit <a href=\"/setup\" class=\"text-primary underline\">Settings</a> to connect Slack, Google Workspace, and other integrations.</p></div>")
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</div><div class=\"flex justify-between\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -824,7 +839,7 @@ func Setup() templ.Component {
 							}()
 						}
 						ctx = templ.InitializeContext(ctx)
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "← Back")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "← Back")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -852,7 +867,7 @@ func Setup() templ.Component {
 							}()
 						}
 						ctx = templ.InitializeContext(ctx)
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "Hire your CEO")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "Hire your CEO")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -865,7 +880,7 @@ func Setup() templ.Component {
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</div></div></form>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "</div></div></form>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -881,7 +896,7 @@ func Setup() templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

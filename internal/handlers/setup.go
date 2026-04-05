@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/17twenty/rally/internal/db"
 	"github.com/17twenty/rally/internal/db/dao"
@@ -50,13 +51,16 @@ func (h *SetupHandler) Show(w http.ResponseWriter, r *http.Request) {
 			}
 
 			templ.Handler(pages.Settings(pages.SettingsData{
-				Company:        company,
-				SlackConnected: slackConnected,
+				Company:         company,
+				SlackConnected:  slackConnected,
+				SlackConfigured: os.Getenv("SLACK_CLIENT_ID") != "",
 			})).ServeHTTP(w, r)
 			return
 		}
 	}
-	templ.Handler(pages.Setup()).ServeHTTP(w, r)
+	templ.Handler(pages.Setup(pages.SetupWizardData{
+		SlackConfigured: os.Getenv("SLACK_CLIENT_ID") != "",
+	})).ServeHTTP(w, r)
 }
 
 // Create handles POST /setup.

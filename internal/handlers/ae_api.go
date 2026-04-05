@@ -226,6 +226,15 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 		company = companyObs{Name: c.Name, Mission: db.Deref(c.Mission)}
 	}
 
+	// Load model_ref from employee config (allows dynamic model changes without rehiring).
+	var modelRef string
+	if ec, ecErr := h.q().GetEmployeeConfig(ctx, employeeID); ecErr == nil {
+		var cfg domain.EmployeeConfig
+		if jsonErr := json.Unmarshal(ec.Config, &cfg); jsonErr == nil && cfg.Cognition.DefaultModelRef != "" {
+			modelRef = cfg.Cognition.DefaultModelRef
+		}
+	}
+
 	// Fetch team roster.
 	type teamMemberObs struct {
 		Name   string `json:"name"`
@@ -246,6 +255,7 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"company":        company,
 		"team":           team,
+		"model_ref":      modelRef,
 		"slack_events":   slackEvents,
 		"memories":       memories,
 		"tasks":          tasks,

@@ -85,6 +85,7 @@ func (c *RallyClient) Heartbeat(ctx context.Context, cycle int) error {
 type Observations struct {
 	Company       CompanyObs        `json:"company"`
 	Team          []TeamMemberObs   `json:"team"`
+	ModelRef      string            `json:"model_ref"` // server-side model override
 	SlackEvents   []SlackEventObs   `json:"slack_events"`
 	Memories      []MemoryObs       `json:"memories"`
 	Tasks         []TaskObs         `json:"tasks"`

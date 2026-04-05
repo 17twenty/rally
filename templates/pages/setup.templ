@@ -9,7 +9,7 @@ import (
 	"github.com/17twenty/rally/templates/layout"
 )
 
-templ Setup() {
+templ Setup(data SetupWizardData) {
 	@layout.Page("Set up Rally for Rally") {
 		<div
 			class="max-w-2xl mx-auto"
@@ -236,12 +236,25 @@ templ Setup() {
 									<li>The CEO will review the mission and propose team hires</li>
 									<li>You approve hires from the company page</li>
 								</ul>
-								<div class="mt-4 p-3 rounded-md bg-muted/50 text-sm">
-									<p class="font-medium">After setup</p>
-									<p class="text-muted-foreground mt-1">
-										Visit <a href="/slack/install" class="text-primary underline">Settings</a> to connect Slack, Google Workspace, and other integrations.
-									</p>
-								</div>
+								if !data.SlackConfigured {
+									<div class="mt-4 p-3 rounded-md bg-destructive/10 border border-destructive/20 text-sm">
+										<p class="font-medium text-destructive">Slack Not Configured</p>
+										<p class="text-muted-foreground mt-1">
+											<code>SLACK_CLIENT_ID</code> and <code>SLACK_CLIENT_SECRET</code> are not set in your environment.
+											Your AEs won't be able to communicate via Slack until you configure these and connect your workspace via Settings.
+										</p>
+										<p class="text-muted-foreground mt-1">
+											See the <a href="https://api.slack.com/apps" class="text-primary underline" target="_blank">Slack API dashboard</a> to create an app.
+										</p>
+									</div>
+								} else {
+									<div class="mt-4 p-3 rounded-md bg-muted/50 text-sm">
+										<p class="font-medium">After setup</p>
+										<p class="text-muted-foreground mt-1">
+											Visit <a href="/setup" class="text-primary underline">Settings</a> to connect Slack, Google Workspace, and other integrations.
+										</p>
+									</div>
+								}
 							</div>
 							<div class="flex justify-between">
 								@button.Button(button.Props{

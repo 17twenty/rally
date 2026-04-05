@@ -1,58 +1,67 @@
 # Rally — an operating system for organizations
 
-Rally is a platform for building and operating **living organizations composed of humans and artificial employees (AEs)**. You define a company, hire AEs (CEO, CTO, engineers, etc.), connect them to real tools (Slack, GitHub, browser), and Rally runs a persistent, observable org that plans and executes work autonomously.
+Rally is a platform for building and operating **living organizations composed of humans and artificial employees (AEs)**. You define a company with a mission, hire a CEO, and Rally builds a persistent, observable team that plans and executes work autonomously.
 
 > Rally is not a chatbot. It is an operating system for organizations where intelligence is programmable, persistent, and collaborative.
 
 ---
 
-## Architecture Overview
+## How It Works
+
+1. **Create a company** with a name, mission, and policies
+2. **Rally hires a CEO** — the founding AI executive
+3. **The CEO proposes hires** based on the company mission (CTO, engineers, designers, etc.)
+4. **You approve hires** from the web UI — each gets their own Docker container
+5. **AEs work autonomously** — they check Slack, manage backlogs, delegate tasks, and communicate with each other
+6. **You interact via Slack** — just like talking to a real team
+
+No hardcoded roles. The org structure is dynamic, driven by the CEO's understanding of what the company needs.
+
+---
+
+## Architecture
 
 ```text
-User (Web UI)
+Human (Slack + Web UI)
    ↓
-Rally Core (Go + templui)
+Rally Server (Go + templui + River queue)
+   ├── LLM Router (OpenAI SDK + Anthropic SDK)
+   ├── Tool Gateway (Slack, GitHub, Google, Figma, Browser)
+   ├── Credential Vault (plaintext in DB)
+   └── Container Manager (Docker)
    ↓
---------------------------------------------------
-| Orchestrator | LLM Router | Knowledgebase       |
-| Agent Runtime | Tool Gateway | Org Manager      |
---------------------------------------------------
-   ↓
-Postgres + River
-   ↓
-External Systems (Slack, GitHub, Browser, etc.)
+AE Containers (rally-ae-base:latest)
+   ├── Multi-turn agentic loop (observe → think → act → iterate)
+   ├── Local tools (Bash, Read, Write, Edit, Grep, Glob, Browser)
+   ├── Remote tools (via Rally gateway — Slack, GitHub, etc.)
+   ├── Work tracking (BacklogList/Add/Update)
+   ├── Collaboration (Delegate, Escalate, SendMessage, ProposeHire)
+   └── Session state persistence (/home/ae/scratch/session_state.md)
 ```
 
-| Component | Responsibility |
-|---|---|
-| **Rally Core** | Web UI (Go + templui), API layer, orchestration control plane, config management |
-| **Org Manager** | Org structure, reporting lines, roles, hiring logic |
-| **Agent Runtime** | Per-AE worker loop driven by River heartbeat jobs; each AE has config, memory, tools, and model routing |
-| **LLM Router** | Model selection, provider routing, API normalization (OpenAI + Anthropic compatible) |
-| **Tool Gateway** | Central interface for Slack, GitHub, shell, browser — enforces permissions and logging |
-| **Knowledgebase** | Shared company facts, employee registry, decisions, docs, playbooks |
-| **Memory** | Per-AE private episodic memory, reflections, heuristics |
-| **Queue** | River-backed queue for heartbeat scheduling, retries, async tool execution |
+Each AE runs a **context-driven heartbeat loop** (default: every 300s):
+- Receives rich context: identity, team roster, company policy, backlog, session notes
+- The LLM decides what to do — no hardcoded priority logic
+- Calls tools, sees results, iterates (up to 25 turns per cycle)
+- Writes session state for continuity across cycles
 
 ---
 
 ## Prerequisites
 
 - **Go 1.23+**
-- **Docker** (for Postgres via docker-compose)
+- **Docker** (Docker Desktop for macOS/Windows)
 - **[templ CLI](https://templ.guide/quick-start/installation)** — `go install github.com/a-h/templ/cmd/templ@latest`
 - **[sqlc](https://sqlc.dev/)** — `go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest`
 - **[task](https://taskfile.dev/installation/)** — Taskfile runner
 - **[golang-migrate](https://github.com/golang-migrate/migrate)** — `go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest`
-- **Playwright** — installed via `task playwright:install`
 
 ---
 
-## Setup
+## Quick Start
 
 ```bash
-# 1. Clone the repo
-git clone <repo-url>
+# 1. Clone and enter the project
 cd rally
 
 # 2. Copy environment file and fill in values
@@ -60,268 +69,192 @@ cp .env.example .env
 $EDITOR .env
 
 # 3. Start Postgres
-task docker:up
+task db-start
 
 # 4. Apply DB migrations
-task migrate
+task db-migrate
 
-# 5. Start development server (templ watch + tailwind + go server)
-task dev
+# 5. Build the AE Docker image
+task ae-build
+
+# 6. Start the server
+task server
+
+# 7. Visit http://localhost:8432
+# The setup wizard will guide you through creating a company and hiring your CEO.
 ```
-
-The web UI will be available at `http://localhost:7331` (templ dev proxy). The proxy forwards to the Go server at `http://localhost:8432`.
-
-> The server defaults to port 8432 in development. Set the `PORT` env var to change.
 
 ---
 
 ## Environment Variables
 
+### Required
+
 | Variable | Description |
 |---|---|
-| `DATABASE_URL` | Postgres connection string (used by `task migrate`) |
-| `DB_URI` | Postgres connection string (used by Taskfile internal tasks) |
-| `SLACK_BOT_TOKEN` | Slack bot token (`xoxb-...`) for posting messages and reading events |
-| `SLACK_SIGNING_SECRET` | Slack signing secret for verifying incoming webhook payloads |
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude models |
-| `OPENAI_API_KEY` | OpenAI API key for GPT models |
-| `GITHUB_TOKEN` | GitHub personal access token for the GitHub tool |
-| `PORT` | HTTP server port (default: `8432` in dev, set to `8080` via docker-compose in prod) |
-| `APP_NAME` | Application name used in Docker container naming (default: `rally`) |
-| `RALLY_WORKSPACE_ROOT` | Host path for AE workspace storage (default: `/var/rally/workspaces` — see [Workspaces](#workspaces--ae-containers)) |
+| `DATABASE_URL` | Postgres connection string |
+| `GREENTHREAD_API_KEY` | API key for Greenthread LLM provider (default provider) |
+
+### AE Container Runtime
+
+| Variable | Description |
+|---|---|
+| `RALLY_WORKSPACE_ROOT` | Host path for workspace storage (default: `/var/rally/workspaces` — use a local path on macOS) |
 | `RALLY_API_URL` | URL AE containers use to reach Rally (default: `http://host.docker.internal:8432`) |
-| `VAULT_ENCRYPTION_KEY` | AES-256 key for credential vault — generate with `openssl rand -base64 32` |
-| `GREENTHREAD_API_KEY` | API key for Greenthread LLM provider (OpenAI-compatible, default provider) |
-| `GOOGLE_CLIENT_ID` | Google OAuth2 client ID (for Google Workspace tool) |
+
+### Slack (for AE communication)
+
+| Variable | Description |
+|---|---|
+| `SLACK_CLIENT_ID` | Slack app client ID (from api.slack.com) |
+| `SLACK_CLIENT_SECRET` | Slack app client secret |
+| `SLACK_BOT_TOKEN` | Bot token (alternative to OAuth — set directly or connect via Settings) |
+| `SLACK_SIGNING_SECRET` | For verifying inbound Slack webhooks |
+
+### Optional Integrations
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic API key (for Claude models) |
+| `OPENAI_API_KEY` | OpenAI API key (for GPT models) |
+| `GITHUB_TOKEN` | GitHub personal access token |
+| `GOOGLE_CLIENT_ID` | Google OAuth2 client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth2 client secret |
-| `GOOGLE_REDIRECT_URI` | Google OAuth2 redirect URI (default: `http://localhost:8432/oauth/google/callback`) |
+| `FIGMA_PERSONAL_ACCESS_TOKEN` | Figma API token |
 
 ---
 
-## Workspaces & AE Containers
-
-Each AE runs as a Docker container using the `rally-ae-base:latest` image. Rally (the control plane) provisions containers when a company's team is built, and each AE gets two filesystem mounts connecting it back to the host.
-
-### Workspace layout
-
-`RALLY_WORKSPACE_ROOT` is the host directory where all company workspace files live. Rally creates the following structure automatically:
-
-```text
-$RALLY_WORKSPACE_ROOT/
-└── {companyID}/
-    ├── shared/                  ← Shared workspace (mounted as /workspace in every AE container)
-    │   ├── playbook.md
-    │   └── research/
-    │       └── competitors.md
-    └── .ae/
-        ├── {employeeID_1}/      ← Private scratch (mounted as /home/ae/scratch in that AE's container)
-        │   └── screenshot-1712345678.png
-        └── {employeeID_2}/
-            └── draft-email.txt
-```
-
-| Mount | Host path | Container path | Visibility |
-|---|---|---|---|
-| **Shared workspace** | `{ROOT}/{companyID}/shared` | `/workspace` | All AEs in the company |
-| **Per-AE scratch** | `{ROOT}/{companyID}/.ae/{employeeID}` | `/home/ae/scratch` | Only that AE |
-
-- **Shared workspace** (`/workspace`): collaborative space where AEs read and write artifacts visible to the whole team — documents, research, code, playbooks. This is the AE's working directory.
-- **Per-AE scratch** (`/home/ae/scratch`): private to each AE for temporary files — browser screenshots, intermediate computations, draft content before publishing to the shared workspace.
-
-### Setting up for local development
-
-On macOS, the default `/var/rally/workspaces` requires root. Set `RALLY_WORKSPACE_ROOT` to a local path instead:
-
-```bash
-# In .env
-RALLY_WORKSPACE_ROOT=/path/to/rally/.workspaces
-RALLY_API_URL=http://host.docker.internal:8432
-```
-
-`RALLY_API_URL` is the address AE containers use to call back to the Rally server. On Docker Desktop (macOS/Windows), `host.docker.internal` resolves to the host machine. In production or Linux, use the appropriate internal service URL.
-
-### Building and running AE containers
-
-```bash
-# Build the AE base image (required before hiring)
-task ae-build
-
-# Start the database and server
-task db-start
-task db-migrate
-task server        # or: task dev (for hot reload)
-
-# Create a company and build its team via the web UI at http://localhost:8432
-# Or via API:
-curl -X POST http://localhost:8432/companies \
-  --data-urlencode "name=Acme Corp" \
-  --data-urlencode "mission=Build the best widgets" \
-  --data-urlencode "emp_name=Your Name" \
-  --data-urlencode "emp_role=CEO" \
-  --data-urlencode "emp_specialties=strategy"
-# Returns a redirect with the company ID
-
-curl -X POST http://localhost:8432/companies/{id}/build
-# Hires all AEs, provisions containers, returns {"status":"ready","hired":8}
-```
-
-### Managing AE containers
-
-```bash
-task ae-list          # List all running AE containers with status and role
-task ae-logs -- {name} # Tail logs for a specific AE (e.g., rally-acme-corp-ceo-alex)
-task ae-stop-all      # Stop all AE containers
-```
-
-### How AE containers work
-
-Each container runs the `ae-agent` binary which:
-
-1. **Starts a heartbeat loop** (default: every 300s) — observe, plan, act, evaluate, store
-2. **Calls back to Rally** via `RALLY_API_URL` using a unique API token for authentication
-3. **Executes local tools** inside the container — shell commands, file read/write in `/workspace`, browser automation via Playwright/Chromium
-4. **Proxies remote tools** through Rally — Slack messages, GitHub operations, Google Workspace actions
-
-The container receives its identity and personality via environment variables (`SOUL_MD`, `AE_CONFIG`, `EMPLOYEE_ID`, etc.), set automatically during the hiring flow.
-
-### Container networking
-
-AE containers join the `rally-net` Docker bridge network. The Rally server must be reachable from this network — in local dev, `host.docker.internal:8432` handles this automatically via Docker Desktop.
-
----
-
-## Taskfile Tasks
+## Taskfile Commands
 
 | Task | Description |
 |---|---|
-| `task dev` | Start development server with hot reload (templ watch + tailwind) |
+| `task server` | Start the server (no hot reload) |
+| `task dev` | Start with hot reload (templ + tailwind) |
 | `task build` | Build the server binary |
 | `task test` | Run all tests |
-| `task gen` | Run templ code generation |
-| `task sqlc` | Generate type-safe DB code from SQL queries |
+| `task gen` | Regenerate templ Go files |
+| `task sqlc` | Regenerate DB access layer from SQL queries |
 | `task db-start` | Start PostgreSQL container |
 | `task db-stop` | Stop PostgreSQL container |
-| `task db-reset` | Destroy and recreate the database (fresh data) |
 | `task db-migrate` | Apply DB and River migrations |
-| `task templ` | Run templ with integrated server and hot reload |
-| `task tailwind` | Watch Tailwind CSS changes |
-| `task tailwind:build` | Build Tailwind CSS for production (minified) |
-| `task ae-build` | Build the AE agent Docker image (`rally-ae-base:latest`) |
-| `task ae-list` | List all running AE containers with status and role |
-| `task ae-logs -- {name}` | Tail logs for a specific AE container |
+| `task db-reset` | Destroy and recreate database |
+| `task ae-build` | Build the AE agent Docker image |
+| `task ae-list` | List running AE containers |
+| `task ae-logs -- {name}` | Tail logs for an AE container |
 | `task ae-stop-all` | Stop all AE containers |
-| `task playwright:install` | Install Playwright browsers (Chromium) |
-| `task server` | Run server directly without hot reload (quick manual testing) |
+| `task nuke` | Delete ALL data and containers (destructive) |
 
 ---
 
-## Development Workflow
+## AE Tools
 
-```bash
-task dev          # Start hot-reload dev server (templ + tailwind + go run)
-task build        # Compile server binary
-task test         # Run go test ./...
-task sqlc         # Regenerate DB access layer after changing SQL queries
-task gen          # Regenerate templ Go files after changing .templ files
-```
+Every AE has access to these tools. The LLM decides which to use based on context.
 
-After modifying `.templ` files, `task dev` auto-regenerates them. For a one-off generation run `task gen`.
+### Local Tools (execute inside the container)
 
-After modifying SQL in `internal/db/queries/`, run `task sqlc` to regenerate `internal/db/dao/`.
-
----
-
-## Docker Workflow
-
-```bash
-task docker:up      # Start Postgres (and any other compose services)
-task docker:down    # Stop all compose services
-task docker:reset   # Wipe DB volume and restart fresh
-task docker:logs    # Tail server logs
-```
-
----
-
-## Slack Setup
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app **From scratch**.
-2. Under **OAuth & Permissions**, add the following **Bot Token Scopes**:
-   - `channels:history` — read messages from public channels
-   - `channels:join` — join channels
-   - `channels:read` — list channels
-   - `chat:write` — post messages
-   - `groups:history` — read messages from private channels
-   - `groups:read` — list private channels
-   - `im:history` — read direct messages
-   - `im:read` — list DMs
-   - `im:write` — open DM conversations
-   - `users:read` — look up user info
-   - `users:read.email` — look up users by email
-3. Under **Event Subscriptions**, enable events and point the Request URL to `https://<your-host>/slack/events`.
-   - Subscribe to bot events: `message.channels`, `message.groups`, `message.im`
-4. Install the app to your workspace and copy the **Bot User OAuth Token** → `SLACK_BOT_TOKEN` in `.env`.
-5. Copy the **Signing Secret** from Basic Information → `SLACK_SIGNING_SECRET` in `.env`.
-
----
-
-## Google Workspace Setup
-
-Rally AEs can send/receive Gmail, create Google Docs, and manage Drive files via the Google Workspace tool.
-
-### Required OAuth Scopes
-
-| Scope | Purpose |
+| Tool | Description |
 |---|---|
-| `https://www.googleapis.com/auth/gmail.send` | Send email as the AE |
-| `https://www.googleapis.com/auth/gmail.readonly` | Read and list emails |
-| `https://www.googleapis.com/auth/documents` | Create and edit Google Docs |
-| `https://www.googleapis.com/auth/drive.file` | Upload and list Drive files |
+| `Bash` | Execute shell commands |
+| `Read` | Read files with line numbers, offset/limit |
+| `Write` | Create or overwrite files |
+| `Edit` | String-replacement edits with staleness guard |
+| `Grep` | Regex search across workspace files (uses ripgrep) |
+| `Glob` | Find files by pattern |
+| `ListFiles` | List directory contents |
+| `BrowserNavigate` | Navigate URLs via Playwright/Chromium |
 
-### Create a Google Cloud Project & OAuth2 Credentials
+### Work Tracking
 
-1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create a new project (e.g. `rally`).
-2. Enable the following APIs: **Gmail API**, **Google Docs API**, **Google Drive API**.
-3. Navigate to **APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID**.
-4. Set application type to **Web application**.
-5. Add an authorized redirect URI: `http://localhost:8432/oauth/google/callback` (update host for production).
-6. Copy the **Client ID** and **Client Secret** → set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env`.
-7. Set `GOOGLE_REDIRECT_URI=http://localhost:8432/oauth/google/callback` in `.env`.
+| Tool | Description |
+|---|---|
+| `BacklogList` | List work items by status |
+| `BacklogAdd` | Create a work item |
+| `BacklogUpdate` | Update status or add notes |
+| `UpdateTask` | Mark assigned tasks as done/in_progress |
 
-### Authorize an AE
+### Collaboration
 
-Each AE authorizes independently. To trigger the OAuth flow for a specific AE:
+| Tool | Description |
+|---|---|
+| `ProposeHire` | Propose a new team member (human approval required) |
+| `ListTeam` | See current team roster |
+| `Delegate` | Assign work to another AE by role |
+| `Escalate` | Flag an issue for human attention (posts to Slack) |
+| `SendMessage` | Direct message another AE |
+| `SlackSend` | Post to a Slack channel |
 
-```
-GET /oauth/google?employee_id={employee_id}
-```
+### Remote Tools (via Rally gateway)
 
-This redirects the user to Google's consent screen. After approval, the token is stored in the credential vault and the AE can immediately use the Google Workspace tool.
-
-All AEs have full access to Google Workspace actions (email, docs, drive, calendar) once authorized. No additional config flags needed.
+GitHub, Google Workspace (Gmail, Docs, Drive, Calendar), Figma, and more — discovered dynamically at startup from the server's tool registry.
 
 ---
 
-## Architecture Diagram (PRD §4.1)
+## Workspaces
 
-```text
-User (Web UI)
-   ↓
-Rally Core (Go + templui)
-   ↓
---------------------------------------------------
-| Orchestrator | LLM Router | Knowledgebase       |
-| Agent Runtime | Tool Gateway | Org Manager      |
---------------------------------------------------
-   ↓
-Postgres + River
-   ↓
-External Systems (Slack, GitHub, Browser, etc.)
+Each AE gets two filesystem mounts:
+
+| Mount | Container Path | Visibility |
+|---|---|---|
+| Shared workspace | `/workspace` | All AEs in the company |
+| Private scratch | `/home/ae/scratch` | Only that AE |
+
+The shared workspace is seeded with `README.md` and `POLICIES.md` on first hire. AEs write session state to their private scratch directory for continuity across heartbeat cycles.
+
+---
+
+## Web UI
+
+| Page | Purpose |
+|---|---|
+| `/` | Dashboard — agent cards, team activity, recent logs |
+| `/setup` | First-run wizard / Settings page (integrations, danger zone) |
+| `/companies/{id}` | Company detail — org chart, policy editor, proposed hires with approve/reject |
+| `/agents` | Agent list with last-active timestamps |
+| `/agents/{id}` | Agent detail — current work, soul, memory, tool logs |
+| `/chat` | Chat with any AE or Rally orchestrator |
+| `/tasks` | Task management |
+| `/credentials` | Manage OAuth tokens and API keys |
+| `/logs` | Tool execution log viewer |
+| `/slack/install` | Connect Slack workspace via OAuth |
+
+---
+
+## Slack Integration
+
+Rally AEs communicate with your team via Slack. To set up:
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app
+2. Add the required bot scopes (see `.env.example` for the full list)
+3. Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` in `.env`
+4. Start Rally and visit **Settings** → click **Connect** next to Slack
+5. Authorize the app in your workspace — Rally stores the bot token automatically
+
+AEs post messages as `[AEName] message` in channels. They receive Slack events via the `/slack/events` webhook endpoint.
+
+---
+
+## Development
+
+```bash
+# After changing .templ files
+task gen
+
+# After changing SQL queries in internal/db/queries/
+task sqlc
+
+# Run tests
+task test
+
+# Full reset (nuke all data + containers)
+task nuke
 ```
 
-**Agent heartbeat loop:**
+Database access uses sqlc-generated queries (`internal/db/dao/`). Add new queries to `internal/db/queries/*.sql` and run `task sqlc` to generate.
 
-```text
-observe → plan → act → evaluate → store
-```
+---
 
-Sources feeding observe: Slack messages, scheduled tasks, AE memory, shared KB.
+## LLM Providers
+
+Rally uses the **OpenAI** and **Anthropic** Go SDKs with native tool-use support. The default provider is Greenthread (OpenAI-compatible, uses streaming for tool-call support on vLLM).
+
+Models and providers are configured in `config/models.yaml` and `config/providers.yaml`. Each AE's model can be changed dynamically via the employee config in the database — takes effect on the next heartbeat cycle.
