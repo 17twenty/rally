@@ -10,14 +10,19 @@ import (
 
 	"github.com/17twenty/rally/internal/container"
 	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/internal/llm"
 	"github.com/17twenty/rally/internal/memory"
+	"github.com/17twenty/rally/internal/queue"
 	"github.com/17twenty/rally/internal/slack"
 	"github.com/17twenty/rally/internal/tools"
 	"github.com/17twenty/rally/internal/vault"
 	"github.com/17twenty/rally/internal/workspace"
 )
+
+// q returns a dao.Queries instance for the handler's DB pool.
+func (h *AEAPIHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
 
 // AEAPIHandler handles the /api/ae/* endpoints used by AE agent containers.
 type AEAPIHandler struct {
@@ -57,9 +62,10 @@ func (h *AEAPIHandler) Register(w http.ResponseWriter, r *http.Request) {
 	employeeID := r.Header.Get("X-AE-Employee-ID")
 	slog.Info("ae_register", "employee_id", employeeID)
 
-	_, err := h.DB.Pool.Exec(r.Context(),
-		`UPDATE employees SET container_status = 'running' WHERE id = $1`, employeeID)
-	if err != nil {
+	if err := h.q().UpdateEmployeeContainerStatus(r.Context(), dao.UpdateEmployeeContainerStatusParams{
+		ID:              employeeID,
+		ContainerStatus: db.Ref("running"),
+	}); err != nil {
 		slog.Warn("ae_register: update failed", "err", err)
 	}
 
@@ -111,22 +117,22 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch unprocessed Slack events for this company
 	var slackEvents []slackEventObs
-	rows, err := h.DB.Pool.Query(ctx, `
-		SELECT id, event_type, COALESCE(channel,''), COALESCE(user_id,''), COALESCE(thread_ts,''), payload
-		FROM slack_events
-		WHERE company_id = $1 AND processed_at IS NULL
-		ORDER BY created_at ASC LIMIT 10
-	`, companyID)
+	daoEvents, err := h.q().GetUnprocessedSlackEvents(ctx, dao.GetUnprocessedSlackEventsParams{
+		CompanyID: companyID,
+		Limit:     10,
+	})
 	if err == nil {
-		for rows.Next() {
-			var evt slackEventObs
-			var payloadBytes []byte
-			if rows.Scan(&evt.ID, &evt.EventType, &evt.Channel, &evt.UserID, &evt.ThreadTS, &payloadBytes) == nil {
-				_ = json.Unmarshal(payloadBytes, &evt.Payload)
-				slackEvents = append(slackEvents, evt)
+		for _, e := range daoEvents {
+			evt := slackEventObs{
+				ID:        e.ID,
+				EventType: e.EventType,
+				Channel:   db.Deref(e.Channel),
+				UserID:    db.Deref(e.UserID),
+				ThreadTS:  db.Deref(e.ThreadTs),
 			}
+			_ = json.Unmarshal(e.Payload, &evt.Payload)
+			slackEvents = append(slackEvents, evt)
 		}
-		rows.Close()
 	}
 
 	// Fetch recent memories
@@ -141,26 +147,20 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch active tasks assigned to this AE
 	var tasks []taskObs
-	taskRows, err := h.DB.Pool.Query(ctx, `
-		SELECT id, title, COALESCE(description,''), status
-		FROM tasks WHERE assignee_id = $1 AND status NOT IN ('done','cancelled')
-		ORDER BY created_at DESC LIMIT 10
-	`, employeeID)
+	daoTasks, err := h.q().ListTasksByAssignee(ctx, &employeeID)
 	if err == nil {
-		for taskRows.Next() {
-			var t taskObs
-			if taskRows.Scan(&t.ID, &t.Title, &t.Description, &t.Status) == nil {
-				tasks = append(tasks, t)
-			}
+		for _, t := range daoTasks {
+			tasks = append(tasks, taskObs{
+				ID:          t.ID,
+				Title:       t.Title,
+				Description: t.Description,
+				Status:      t.Status,
+			})
 		}
-		taskRows.Close()
 	}
 
 	// Fetch company policy
-	var policyDoc string
-	_ = h.DB.Pool.QueryRow(ctx,
-		`SELECT COALESCE(policy_doc,'') FROM companies WHERE id = $1`, companyID,
-	).Scan(&policyDoc)
+	policyDoc, _ := h.q().GetCompanyPolicy(ctx, companyID)
 
 	// Fetch active work items (backlog) for this AE.
 	type workItemObs struct {
@@ -170,19 +170,16 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 		Priority string `json:"priority"`
 	}
 	var workItems []workItemObs
-	wiRows, err := h.DB.Pool.Query(ctx,
-		`SELECT id, title, status, priority FROM work_items
-		 WHERE owner_id = $1 AND status NOT IN ('done','cancelled')
-		 ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at ASC
-		 LIMIT 20`, employeeID)
+	daoWI, err := h.q().ListWorkItemsByOwner(ctx, employeeID)
 	if err == nil {
-		for wiRows.Next() {
-			var wi workItemObs
-			if wiRows.Scan(&wi.ID, &wi.Title, &wi.Status, &wi.Priority) == nil {
-				workItems = append(workItems, wi)
-			}
+		for _, wi := range daoWI {
+			workItems = append(workItems, workItemObs{
+				ID:       wi.ID,
+				Title:    wi.Title,
+				Status:   wi.Status,
+				Priority: wi.Priority,
+			})
 		}
-		wiRows.Close()
 	}
 
 	// Fetch unread messages from other AEs.
@@ -191,30 +188,71 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 		Message string `json:"message"`
 	}
 	var messages []msgObs
-	msgRows, err := h.DB.Pool.Query(ctx,
-		`SELECT from_id, message FROM ae_messages WHERE to_id = $1 AND read = false ORDER BY created_at ASC LIMIT 10`, employeeID)
+	daoMsgs, err := h.q().ListUnreadMessages(ctx, employeeID)
 	if err == nil {
-		for msgRows.Next() {
-			var m msgObs
-			if msgRows.Scan(&m.FromID, &m.Message) == nil {
-				messages = append(messages, m)
-			}
+		for _, m := range daoMsgs {
+			messages = append(messages, msgObs{FromID: m.FromID, Message: m.Message})
 		}
-		msgRows.Close()
 		// Mark as read.
 		if len(messages) > 0 {
-			_, _ = h.DB.Pool.Exec(ctx, `UPDATE ae_messages SET read = true WHERE to_id = $1 AND read = false`, employeeID)
+			_ = h.q().MarkMessagesAsRead(ctx, employeeID)
+		}
+	}
+
+	// Fetch pending proposed hires for this company (so AEs don't re-propose).
+	type proposedHireObs struct {
+		Role      string `json:"role"`
+		Status    string `json:"status"`
+		Rationale string `json:"rationale"`
+	}
+	var proposedHires []proposedHireObs
+	if hires, phErr := h.q().ListPendingHiresByCompany(ctx, companyID); phErr == nil {
+		for _, ph := range hires {
+			proposedHires = append(proposedHires, proposedHireObs{
+				Role:      ph.Role,
+				Status:    ph.Status,
+				Rationale: db.Deref(ph.Rationale),
+			})
+		}
+	}
+
+	// Fetch company info.
+	type companyObs struct {
+		Name    string `json:"name"`
+		Mission string `json:"mission"`
+	}
+	var company companyObs
+	if c, cErr := h.q().GetCompany(ctx, companyID); cErr == nil {
+		company = companyObs{Name: c.Name, Mission: db.Deref(c.Mission)}
+	}
+
+	// Fetch team roster.
+	type teamMemberObs struct {
+		Name   string `json:"name"`
+		Role   string `json:"role"`
+		Type   string `json:"type"`
+		Status string `json:"status"`
+	}
+	var team []teamMemberObs
+	if emps, tErr := h.q().ListEmployeesByCompany(ctx, companyID); tErr == nil {
+		for _, e := range emps {
+			team = append(team, teamMemberObs{
+				Name: db.Deref(e.Name), Role: e.Role, Type: e.Type, Status: e.Status,
+			})
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"slack_events": slackEvents,
-		"memories":     memories,
-		"tasks":        tasks,
-		"work_items":   workItems,
-		"messages":     messages,
-		"policy_doc":   policyDoc,
+		"company":        company,
+		"team":           team,
+		"slack_events":   slackEvents,
+		"memories":       memories,
+		"tasks":          tasks,
+		"work_items":     workItems,
+		"messages":       messages,
+		"proposed_hires": proposedHires,
+		"policy_doc":     policyDoc,
 	})
 }
 
@@ -378,11 +416,19 @@ func (h *AEAPIHandler) SubmitLog(w http.ResponseWriter, r *http.Request) {
 	inputJSON, _ := json.Marshal(req.Input)
 	outputJSON, _ := json.Marshal(req.Output)
 
-	_, err := h.DB.Pool.Exec(r.Context(),
-		`INSERT INTO tool_logs (id, employee_id, company_id, tool, action, input, output, success, trace_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		newID(), req.EmployeeID, companyID, req.Tool, req.Action, inputJSON, outputJSON, req.Success, req.TraceID,
-	)
+	_, err := h.q().InsertToolLog(r.Context(), dao.InsertToolLogParams{
+		ID:         newID(),
+		EmployeeID: req.EmployeeID,
+		CompanyID:  db.Ref(companyID),
+		Tool:       req.Tool,
+		Action:     req.Action,
+		Input:      inputJSON,
+		Output:     outputJSON,
+		Success:    req.Success,
+		TraceID:    db.Ref(req.TraceID),
+		TaskID:     nil,
+		CreatedAt:  db.TimePg(time.Now()),
+	})
 	if err != nil {
 		slog.Warn("ae_submit_log: insert failed", "err", err)
 	}
@@ -442,14 +488,10 @@ func (h *AEAPIHandler) ExecuteTool(w http.ResponseWriter, r *http.Request) {
 
 	// Load employee config to get ToolsConfig.
 	var toolsConfig map[string]bool
-	var configJSON []byte
-	err := h.DB.Pool.QueryRow(ctx,
-		`SELECT config FROM employee_configs WHERE employee_id = $1 LIMIT 1`,
-		employeeID,
-	).Scan(&configJSON)
+	ecRow, err := h.q().GetEmployeeConfig(ctx, employeeID)
 	if err == nil {
 		var cfg domain.EmployeeConfig
-		if jsonErr := json.Unmarshal(configJSON, &cfg); jsonErr == nil {
+		if jsonErr := json.Unmarshal(ecRow.Config, &cfg); jsonErr == nil {
 			toolsConfig = cfg.Tools
 		}
 	}
@@ -493,14 +535,10 @@ func (h *AEAPIHandler) ListTools(w http.ResponseWriter, r *http.Request) {
 	// Load employee config.
 	var toolsConfig map[string]bool
 	var employeeRole string
-	var configJSON []byte
-	err := h.DB.Pool.QueryRow(ctx,
-		`SELECT config FROM employee_configs WHERE employee_id = $1 LIMIT 1`,
-		employeeID,
-	).Scan(&configJSON)
+	ecRow, err := h.q().GetEmployeeConfig(ctx, employeeID)
 	if err == nil {
 		var cfg domain.EmployeeConfig
-		if jsonErr := json.Unmarshal(configJSON, &cfg); jsonErr == nil {
+		if jsonErr := json.Unmarshal(ecRow.Config, &cfg); jsonErr == nil {
 			toolsConfig = cfg.Tools
 			employeeRole = cfg.Employee.Role
 		}
@@ -670,11 +708,17 @@ func (h *AEAPIHandler) BacklogAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := newID()
-	_, err := h.DB.Pool.Exec(ctx,
-		`INSERT INTO work_items (id, parent_id, company_id, owner_id, title, description, status, priority, source_task_id)
-		 VALUES ($1, NULLIF($2,''), $3, $4, $5, $6, 'todo', $7, NULLIF($8,''))`,
-		id, req.ParentID, companyID, employeeID, req.Title, req.Description, req.Priority, req.SourceTaskID,
-	)
+	_, err := h.q().CreateWorkItem(ctx, dao.CreateWorkItemParams{
+		ID:           id,
+		ParentID:     db.Ref(req.ParentID),
+		CompanyID:    companyID,
+		OwnerID:      employeeID,
+		Title:        req.Title,
+		Description:  db.Ref(req.Description),
+		Status:       "todo",
+		Priority:     req.Priority,
+		SourceTaskID: db.Ref(req.SourceTaskID),
+	})
 	if err != nil {
 		slog.Warn("backlog_add failed", "err", err)
 		http.Error(w, `{"error":"failed to create work item"}`, http.StatusInternalServerError)
@@ -682,9 +726,12 @@ func (h *AEAPIHandler) BacklogAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record history.
-	_, _ = h.DB.Pool.Exec(ctx,
-		`INSERT INTO work_item_history (id, work_item_id, change_type, content) VALUES ($1, $2, 'created', $3)`,
-		newID(), id, req.Title)
+	_ = h.q().AddWorkItemHistory(ctx, dao.AddWorkItemHistoryParams{
+		ID:         newID(),
+		WorkItemID: id,
+		ChangeType: "created",
+		Content:    &req.Title,
+	})
 
 	slog.Info("backlog_add", "employee_id", employeeID, "item_id", id, "title", req.Title)
 
@@ -708,32 +755,38 @@ func (h *AEAPIHandler) BacklogUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Status != "" {
-		_, err := h.DB.Pool.Exec(ctx,
-			`UPDATE work_items SET status = $1, updated_at = now() WHERE id = $2 AND owner_id = $3`,
-			req.Status, itemID, employeeID)
+		err := h.q().UpdateWorkItemStatus(ctx, dao.UpdateWorkItemStatusParams{
+			ID:      itemID,
+			Status:  req.Status,
+			OwnerID: employeeID,
+		})
 		if err != nil {
 			http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
 			return
 		}
-		_, _ = h.DB.Pool.Exec(ctx,
-			`INSERT INTO work_item_history (id, work_item_id, change_type, content) VALUES ($1, $2, 'status_change', $3)`,
-			newID(), itemID, req.Status)
+		_ = h.q().AddWorkItemHistory(ctx, dao.AddWorkItemHistoryParams{
+			ID:         newID(),
+			WorkItemID: itemID,
+			ChangeType: "status_change",
+			Content:    &req.Status,
+		})
 	}
 
 	if req.Note != "" {
-		_, _ = h.DB.Pool.Exec(ctx,
-			`INSERT INTO work_item_history (id, work_item_id, change_type, content) VALUES ($1, $2, 'note_added', $3)`,
-			newID(), itemID, req.Note)
-		_, _ = h.DB.Pool.Exec(ctx,
-			`UPDATE work_items SET updated_at = now() WHERE id = $1`, itemID)
+		_ = h.q().AddWorkItemHistory(ctx, dao.AddWorkItemHistoryParams{
+			ID:         newID(),
+			WorkItemID: itemID,
+			ChangeType: "note_added",
+			Content:    &req.Note,
+		})
+		_ = h.q().TouchWorkItem(ctx, itemID)
 	}
 
 	// Fetch updated item.
-	var title, status string
-	var updatedAt time.Time
-	_ = h.DB.Pool.QueryRow(ctx,
-		`SELECT title, status, updated_at FROM work_items WHERE id = $1`, itemID,
-	).Scan(&title, &status, &updatedAt)
+	wi, _ := h.q().GetWorkItem(ctx, itemID)
+	title := wi.Title
+	status := wi.Status
+	updatedAt := db.PgTime(wi.UpdatedAt)
 
 	slog.Info("backlog_update", "employee_id", employeeID, "item_id", itemID, "status", req.Status, "note_len", len(req.Note))
 
@@ -769,15 +822,16 @@ func (h *AEAPIHandler) Delegate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find target AE by role.
-	var targetID, targetName string
-	err := h.DB.Pool.QueryRow(ctx,
-		`SELECT id, name FROM employees WHERE company_id = $1 AND role = $2 AND type = 'ae' LIMIT 1`,
-		companyID, req.TargetRole,
-	).Scan(&targetID, &targetName)
+	targetEmp, err := h.q().GetEmployeeByRole(ctx, dao.GetEmployeeByRoleParams{
+		CompanyID: companyID,
+		Role:      req.TargetRole,
+	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"no AE found with role %s"}`, req.TargetRole), http.StatusNotFound)
 		return
 	}
+	targetID := targetEmp.ID
+	targetName := db.Deref(targetEmp.Name)
 
 	// Create work item for target.
 	itemID := newID()
@@ -785,11 +839,15 @@ func (h *AEAPIHandler) Delegate(w http.ResponseWriter, r *http.Request) {
 	if req.Context != "" {
 		desc += "\n\n## Context from delegator\n" + req.Context
 	}
-	_, err = h.DB.Pool.Exec(ctx,
-		`INSERT INTO work_items (id, company_id, owner_id, title, description, status, priority)
-		 VALUES ($1, $2, $3, $4, $5, 'todo', $6)`,
-		itemID, companyID, targetID, req.Title, desc, req.Priority,
-	)
+	_, err = h.q().CreateWorkItem(ctx, dao.CreateWorkItemParams{
+		ID:        itemID,
+		CompanyID: companyID,
+		OwnerID:   targetID,
+		Title:     req.Title,
+		Description: db.Ref(desc),
+		Status:    "todo",
+		Priority:  req.Priority,
+	})
 	if err != nil {
 		http.Error(w, `{"error":"failed to create delegated work item"}`, http.StatusInternalServerError)
 		return
@@ -797,14 +855,23 @@ func (h *AEAPIHandler) Delegate(w http.ResponseWriter, r *http.Request) {
 
 	// Also create a task row for web UI visibility.
 	taskID := newID()
-	_, _ = h.DB.Pool.Exec(ctx,
-		`INSERT INTO tasks (id, company_id, title, description, assignee_id, status) VALUES ($1, $2, $3, $4, $5, 'open')`,
-		taskID, companyID, req.Title, desc, targetID,
-	)
+	h.q().CreateTask(ctx, dao.CreateTaskParams{
+		ID:          taskID,
+		CompanyID:   companyID,
+		Title:       req.Title,
+		Description: db.Ref(desc),
+		AssigneeID:  &targetID,
+		Status:      "open",
+	})
 
-	_, _ = h.DB.Pool.Exec(ctx,
-		`INSERT INTO work_item_history (id, work_item_id, change_type, content, metadata) VALUES ($1, $2, 'created', $3, $4)`,
-		newID(), itemID, "Delegated from "+fromID, fmt.Sprintf(`{"delegated_by":"%s"}`, fromID))
+	delegatedContent := "Delegated from " + fromID
+	_ = h.q().AddWorkItemHistory(ctx, dao.AddWorkItemHistoryParams{
+		ID:         newID(),
+		WorkItemID: itemID,
+		ChangeType: "created",
+		Content:    &delegatedContent,
+		Metadata:   json.RawMessage(fmt.Sprintf(`{"delegated_by":"%s"}`, fromID)),
+	})
 
 	slog.Info("delegate", "from", fromID, "to", targetID, "target_role", req.TargetRole, "title", req.Title)
 
@@ -834,8 +901,8 @@ func (h *AEAPIHandler) Escalate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get AE name for the Slack message.
-	var aeName string
-	_ = h.DB.Pool.QueryRow(ctx, `SELECT name FROM employees WHERE id = $1`, employeeID).Scan(&aeName)
+	emp, _ := h.q().GetEmployee(ctx, employeeID)
+	aeName := db.Deref(emp.Name)
 
 	// Post to Slack if available.
 	if h.SlackClient != nil {
@@ -875,21 +942,24 @@ func (h *AEAPIHandler) AESendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var targetID string
-	err := h.DB.Pool.QueryRow(ctx,
-		`SELECT id FROM employees WHERE company_id = $1 AND role = $2 AND type = 'ae' LIMIT 1`,
-		companyID, req.TargetRole,
-	).Scan(&targetID)
+	targetEmp, err := h.q().GetEmployeeByRole(ctx, dao.GetEmployeeByRoleParams{
+		CompanyID: companyID,
+		Role:      req.TargetRole,
+	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"no AE found with role %s"}`, req.TargetRole), http.StatusNotFound)
 		return
 	}
+	targetID := targetEmp.ID
 
 	msgID := newID()
-	_, err = h.DB.Pool.Exec(ctx,
-		`INSERT INTO ae_messages (id, company_id, from_id, to_id, message) VALUES ($1, $2, $3, $4, $5)`,
-		msgID, companyID, fromID, targetID, req.Message,
-	)
+	_, err = h.q().InsertAEMessage(ctx, dao.InsertAEMessageParams{
+		ID:        msgID,
+		CompanyID: companyID,
+		FromID:    fromID,
+		ToID:      targetID,
+		Message:   req.Message,
+	})
 	if err != nil {
 		http.Error(w, `{"error":"failed to send message"}`, http.StatusInternalServerError)
 		return
@@ -917,9 +987,11 @@ func (h *AEAPIHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Status != "" {
-		_, err := h.DB.Pool.Exec(ctx,
-			`UPDATE tasks SET status = $1 WHERE id = $2 AND assignee_id = $3`,
-			req.Status, taskID, employeeID)
+		err := h.q().UpdateTaskStatusByAssignee(ctx, dao.UpdateTaskStatusByAssigneeParams{
+			ID:         taskID,
+			Status:     req.Status,
+			AssigneeID: &employeeID,
+		})
 		if err != nil {
 			http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
 			return
@@ -930,4 +1002,140 @@ func (h *AEAPIHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"id": taskID, "status": req.Status})
+}
+
+// ProposeHire handles POST /api/ae/propose-hire — AE proposes a new team member.
+func (h *AEAPIHandler) ProposeHire(w http.ResponseWriter, r *http.Request) {
+	employeeID := r.Header.Get("X-AE-Employee-ID")
+	companyID := r.Header.Get("X-AE-Company-ID")
+	ctx := r.Context()
+
+	var req struct {
+		Role       string `json:"role"`
+		Department string `json:"department"`
+		Rationale  string `json:"rationale"`
+		ReportsTo  string `json:"reports_to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Role == "" {
+		http.Error(w, `{"error":"role is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	hire, err := h.q().InsertProposedHire(ctx, dao.InsertProposedHireParams{
+		ID:         newID(),
+		CompanyID:  companyID,
+		ProposedBy: employeeID,
+		Role:       req.Role,
+		Department: db.Ref(req.Department),
+		Rationale:  db.Ref(req.Rationale),
+		ReportsTo:  db.Ref(req.ReportsTo),
+	})
+	if err != nil {
+		http.Error(w, `{"error":"failed to propose hire"}`, http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("propose_hire", "employee_id", employeeID, "role", req.Role, "department", req.Department)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":     hire.ID,
+		"role":   hire.Role,
+		"status": hire.Status,
+	})
+}
+
+// ListTeam handles GET /api/ae/team — returns team members for this company.
+func (h *AEAPIHandler) ListTeam(w http.ResponseWriter, r *http.Request) {
+	companyID := r.Header.Get("X-AE-Company-ID")
+	ctx := r.Context()
+
+	rows, err := h.q().ListEmployeesByCompany(ctx, companyID)
+	if err != nil {
+		http.Error(w, `{"error":"failed to list team"}`, http.StatusInternalServerError)
+		return
+	}
+
+	type teamMember struct {
+		Name   string `json:"name"`
+		Role   string `json:"role"`
+		Type   string `json:"type"`
+		Status string `json:"status"`
+	}
+
+	members := make([]teamMember, 0, len(rows))
+	for _, e := range rows {
+		members = append(members, teamMember{
+			Name:   db.Deref(e.Name),
+			Role:   e.Role,
+			Type:   e.Type,
+			Status: e.Status,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"team": members, "count": len(members)})
+}
+
+// ApproveHire handles POST /companies/{id}/hires/{hire_id}/approve — human approves a proposed hire.
+func (h *AEAPIHandler) ApproveHire(w http.ResponseWriter, r *http.Request) {
+	hireID := r.PathValue("hire_id")
+	ctx := r.Context()
+
+	hire, err := h.q().GetProposedHire(ctx, hireID)
+	if err != nil {
+		http.Error(w, `{"error":"hire not found"}`, http.StatusNotFound)
+		return
+	}
+
+	if hire.Status != "pending" {
+		http.Error(w, `{"error":"hire is not pending"}`, http.StatusConflict)
+		return
+	}
+
+	// Mark as approved.
+	_ = h.q().ApproveProposedHire(ctx, dao.ApproveProposedHireParams{
+		ID:         hireID,
+		ReviewedBy: db.Ref("human"),
+	})
+
+	// Enqueue a hiring job.
+	if queue.Client != nil {
+		_, _ = queue.Client.Insert(ctx, queue.HiringJobArgs{
+			CompanyID:  hire.CompanyID,
+			PlanRoleID: strings.ToLower(strings.ReplaceAll(hire.Role, " ", "-")) + "-ae",
+			Role:       hire.Role,
+			Department: db.Deref(hire.Department),
+			ReportsTo:  db.Deref(hire.ReportsTo),
+		}, nil)
+	}
+
+	slog.Info("approve_hire", "hire_id", hireID, "role", hire.Role)
+
+	http.Redirect(w, r, "/companies/"+hire.CompanyID+"?msg=Approved+"+hire.Role+"+—+hiring+now", http.StatusSeeOther)
+}
+
+// RejectHire handles POST /companies/{id}/hires/{hire_id}/reject — human rejects a proposed hire.
+func (h *AEAPIHandler) RejectHire(w http.ResponseWriter, r *http.Request) {
+	hireID := r.PathValue("hire_id")
+	ctx := r.Context()
+
+	hire, err := h.q().GetProposedHire(ctx, hireID)
+	if err != nil {
+		http.Error(w, `{"error":"hire not found"}`, http.StatusNotFound)
+		return
+	}
+
+	_ = h.q().RejectProposedHire(ctx, dao.RejectProposedHireParams{
+		ID:         hireID,
+		ReviewedBy: db.Ref("human"),
+	})
+
+	slog.Info("reject_hire", "hire_id", hireID, "role", hire.Role)
+
+	http.Redirect(w, r, "/companies/"+hire.CompanyID+"?msg=Rejected+"+hire.Role, http.StatusSeeOther)
 }

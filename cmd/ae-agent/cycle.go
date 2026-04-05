@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-// AgentCycle runs one observe → think → act → iterate cycle.
+// AgentCycle runs one heartbeat cycle using a context-driven agentic loop.
 type AgentCycle struct {
 	Rally          *RallyClient
 	LocalTools     *LocalToolDispatcher
@@ -19,75 +21,70 @@ type AgentCycle struct {
 	ModelRef       string
 	MaxTurns       int              // max tool-use turns per cycle (default 25)
 	RemoteToolDefs []RemoteToolDef  // tools available via Rally gateway
+	CycleCount     int              // incremented each heartbeat
+	ScratchPath    string           // /home/ae/scratch — for session state persistence
 }
 
-// Run executes a single heartbeat cycle using a multi-turn agentic loop.
-// The agent observes context, then enters a loop where it calls the LLM,
-// executes any requested tools, feeds results back, and repeats until the
-// LLM is done or safety limits are hit.
+// Run executes a single heartbeat cycle.
+// The agent receives rich context about its identity, team, current state,
+// and what's new — then the LLM decides what to do. No hardcoded logic.
 func (c *AgentCycle) Run(ctx context.Context) error {
 	maxTurns := c.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 25
 	}
+	c.CycleCount++
 
-	// Wall-clock timeout for the entire cycle.
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	// 1. Observe — gather context from Rally
+	// 1. Gather all context.
 	slog.Info("cycle: observe")
 	obs, err := c.Rally.FetchObservations(ctx)
 	if err != nil {
 		return fmt.Errorf("observe: %w", err)
 	}
 
-	if len(obs.SlackEvents) == 0 && len(obs.Tasks) == 0 && len(obs.WorkItems) == 0 && len(obs.Messages) == 0 {
-		slog.Info("cycle: nothing to do, sleeping")
-		return nil
-	}
+	// Load session state from previous cycles (if any).
+	sessionState := c.loadSessionState()
 
-	// 2. Build initial conversation — merge local + remote tool definitions
+	// 2. Build the context document — the LLM decides what to do from this.
 	tools := localToolDefs()
 	for _, rt := range c.RemoteToolDefs {
 		tools = append(tools, ToolDefinition{
-			Name:        rt.Name,
-			Description: rt.Description,
-			InputSchema: rt.InputSchema,
+			Name: rt.Name, Description: rt.Description, InputSchema: rt.InputSchema,
 		})
 	}
+
+	systemPrompt := c.buildContext(obs, sessionState)
+	userPrompt := c.buildSituation(obs)
+
 	messages := []ChatMessage{
-		{Role: "system", Content: c.buildSystemPrompt(obs)},
-		{Role: "user", Content: c.buildObservationSummary(obs)},
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
 	}
 
-	// 3. Agentic loop — call LLM, execute tools, feed results back
+	// 3. Agentic loop — LLM calls tools, sees results, iterates.
 	totalToolCalls := 0
 	for turn := 0; turn < maxTurns; turn++ {
 		slog.Info("cycle: turn", "turn", turn+1, "messages", len(messages))
 
-		// Simple compaction: if conversation is getting large, trim old tool results.
 		messages = microcompact(messages)
 
 		result, err := c.Rally.ChatLLM(ctx, ChatLLMRequest{
-			ModelRef:  c.ModelRef,
-			Messages:  messages,
-			Tools:     tools,
-			MaxTokens: 4096,
+			ModelRef: c.ModelRef, Messages: messages, Tools: tools, MaxTokens: 4096,
 		})
 		if err != nil {
 			return fmt.Errorf("llm chat (turn %d): %w", turn+1, err)
 		}
 
-		// Append assistant message to conversation.
 		messages = append(messages, result.Message)
 
-		// Check stop condition.
 		switch result.StopReason {
 		case "end_turn":
-			slog.Info("cycle: LLM finished", "turns", turn+1, "total_tool_calls", totalToolCalls)
+			slog.Info("cycle: done", "turns", turn+1, "tool_calls", totalToolCalls)
 			if result.Message.Content != "" {
-				slog.Info("cycle: final response", "text", truncate(result.Message.Content, 200))
+				slog.Info("cycle: summary", "text", truncate(result.Message.Content, 200))
 			}
 			goto done
 
@@ -97,43 +94,32 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 
 		case "tool_use":
 			if len(result.Message.ToolCalls) == 0 {
-				slog.Warn("cycle: tool_use but no tool calls")
 				goto done
 			}
-
-			// Execute each tool call and build result messages.
 			var toolResults []ChatToolResult
 			for _, tc := range result.Message.ToolCalls {
 				slog.Info("cycle: tool_call", "tool", tc.Name, "id", tc.ID)
 				tr := c.executeTool(ctx, tc)
 				toolResults = append(toolResults, tr)
 				totalToolCalls++
-
-				// Log the tool execution to Rally.
 				_ = c.Rally.SubmitLog(ctx, tc.Name, "", tc.Input,
 					map[string]any{"content": truncate(tr.Content, 500)},
 					!tr.IsError, "")
 			}
-
-			// Append tool results as a user message.
-			messages = append(messages, ChatMessage{
-				Role:        "user",
-				ToolResults: toolResults,
-			})
+			messages = append(messages, ChatMessage{Role: "user", ToolResults: toolResults})
 
 		default:
-			slog.Warn("cycle: unexpected stop_reason", "stop_reason", result.StopReason)
 			goto done
 		}
 	}
 
-	slog.Warn("cycle: hit max turns", "max_turns", maxTurns, "total_tool_calls", totalToolCalls)
+	slog.Warn("cycle: hit max turns", "max_turns", maxTurns)
 
 done:
-	// 4. Store memory summary.
-	summary := fmt.Sprintf("Cycle completed. Observed %d slack events, %d tasks. Executed %d tool calls across %d conversation turns.",
-		len(obs.SlackEvents), len(obs.Tasks), totalToolCalls, len(messages))
+	// 4. Store cycle summary as episodic memory.
+	summary := fmt.Sprintf("Cycle %d completed. %d tool calls.", c.CycleCount, totalToolCalls)
 	_ = c.Rally.StoreMemory(ctx, "episodic", summary, map[string]any{
+		"cycle":        c.CycleCount,
 		"tool_calls":   totalToolCalls,
 		"message_count": len(messages),
 	})
@@ -141,43 +127,121 @@ done:
 	return nil
 }
 
-func (c *AgentCycle) buildSystemPrompt(obs *Observations) string {
+// buildContext assembles the system prompt from the agent's full context.
+// This is the "who am I, where do I work, what am I doing" document.
+// The LLM makes all decisions from this context — no hardcoded logic.
+func (c *AgentCycle) buildContext(obs *Observations, sessionState string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("You are %s, the %s.\n\n", c.AEName, c.AERole))
+
+	// Identity.
+	sb.WriteString(fmt.Sprintf("You are %s, the %s at %s.\n\n", c.AEName, c.AERole, obs.Company.Name))
 
 	if c.SoulMD != "" {
-		sb.WriteString("## Your Identity\n")
 		sb.WriteString(c.SoulMD)
 		sb.WriteString("\n\n")
 	}
 
+	// Environment.
+	sb.WriteString("## Your Environment\n")
+	sb.WriteString(fmt.Sprintf("- Company: %s — %s\n", obs.Company.Name, obs.Company.Mission))
+	sb.WriteString(fmt.Sprintf("- Date: %s\n", time.Now().Format("2006-01-02 15:04")))
+	sb.WriteString(fmt.Sprintf("- Heartbeat: cycle #%d\n", c.CycleCount))
+	sb.WriteString("- Workspace: /workspace (shared with all team members)\n")
+	sb.WriteString("- Scratch: /home/ae/scratch (your private working space)\n\n")
+
+	// Company policy.
 	if obs.PolicyDoc != "" {
 		sb.WriteString("## Company Policy\n")
 		sb.WriteString(obs.PolicyDoc)
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString(`## How to Work
-You have tools available to accomplish tasks. Use them as needed.
+	// Team roster.
+	if len(obs.Team) > 0 {
+		sb.WriteString("## Your Team\n")
+		for _, m := range obs.Team {
+			label := m.Name
+			if label == "" {
+				label = m.Role
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s, %s)\n", label, m.Role, m.Type))
+		}
+		sb.WriteString("\n")
+	}
 
-- Call one tool at a time. Review the result before deciding your next step.
-- When reading files, use Read to see the content before making changes.
-- Use Bash for shell commands. Use Read and Write for files.
-- Use SlackSend to communicate with your team.
-- When you are done with a task, respond with a text summary of what you accomplished.
-- If you are unsure about something, gather more information first using your tools.
-- Be concise and focused. Complete the task, then stop.
+	// Pending hire proposals.
+	if len(obs.ProposedHires) > 0 {
+		sb.WriteString("## Pending Hire Proposals (awaiting human approval)\n")
+		for _, ph := range obs.ProposedHires {
+			sb.WriteString(fmt.Sprintf("- %s [%s]\n", ph.Role, ph.Status))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Session state from previous cycles.
+	if sessionState != "" {
+		sb.WriteString("## Your Session Notes (from previous cycles)\n")
+		sb.WriteString(sessionState)
+		sb.WriteString("\n\n")
+	}
+
+	// How to work — generic, applicable to any role.
+	sb.WriteString(`## How to Work
+- Review your current state and what's new before acting.
+- If you have in_progress work items, continue them. Don't start new things until current work is done.
+- If you have new messages, tasks, or Slack mentions, address them.
+- If nothing is urgent, check your backlog for the next priority item.
+- Track your progress: use BacklogAdd to break down work, BacklogUpdate to mark progress.
+- Mark assigned tasks done with UpdateTask when complete.
+- Write to /home/ae/scratch/session_state.md at the end of each cycle to capture what you did and what to follow up on next cycle.
+- When done for this cycle, respond with a brief text summary.
+- If blocked, use Escalate. If you need a colleague's input, use SendMessage.
 `)
 
 	return sb.String()
 }
 
-func (c *AgentCycle) buildObservationSummary(obs *Observations) string {
+// buildSituation assembles the user message — what's happening RIGHT NOW.
+// This is the "what changed, what needs attention" snapshot.
+func (c *AgentCycle) buildSituation(obs *Observations) string {
 	var sb strings.Builder
-	sb.WriteString("## Current Observations\n\n")
+	sb.WriteString("## What's Happening Now\n\n")
 
+	// Current work state.
+	inProgress := 0
+	todo := 0
+	blocked := 0
+	for _, wi := range obs.WorkItems {
+		switch wi.Status {
+		case "in_progress":
+			inProgress++
+		case "todo":
+			todo++
+		case "blocked":
+			blocked++
+		}
+	}
+
+	if inProgress > 0 || todo > 0 || blocked > 0 {
+		sb.WriteString("### Your Work Items\n")
+		for _, wi := range obs.WorkItems {
+			sb.WriteString(fmt.Sprintf("- [%s] (%s) %s (id: %s)\n", wi.Status, wi.Priority, wi.Title, wi.ID))
+		}
+		sb.WriteString("\n")
+	}
+
+	// New tasks assigned.
+	if len(obs.Tasks) > 0 {
+		sb.WriteString("### Tasks Assigned to You\n")
+		for _, t := range obs.Tasks {
+			sb.WriteString(fmt.Sprintf("- [%s] %s: %s (id: %s)\n", t.Status, t.Title, t.Description, t.ID))
+		}
+		sb.WriteString("\n")
+	}
+
+	// New Slack messages.
 	if len(obs.SlackEvents) > 0 {
-		sb.WriteString("### Slack Messages\n")
+		sb.WriteString("### New Slack Messages\n")
 		for _, evt := range obs.SlackEvents {
 			text := ""
 			if t, ok := evt.Payload["text"].(string); ok {
@@ -188,30 +252,7 @@ func (c *AgentCycle) buildObservationSummary(obs *Observations) string {
 		sb.WriteString("\n")
 	}
 
-	if len(obs.Tasks) > 0 {
-		sb.WriteString("### Active Tasks\n")
-		for _, t := range obs.Tasks {
-			sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", t.Status, t.Title, t.Description))
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(obs.Memories) > 0 {
-		sb.WriteString("### Recent Memories\n")
-		for _, m := range obs.Memories {
-			sb.WriteString(fmt.Sprintf("- %s\n", m.Content))
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(obs.WorkItems) > 0 {
-		sb.WriteString("### Your Backlog\n")
-		for _, wi := range obs.WorkItems {
-			sb.WriteString(fmt.Sprintf("- [%s] (%s) %s (id: %s)\n", wi.Status, wi.Priority, wi.Title, wi.ID))
-		}
-		sb.WriteString("\n")
-	}
-
+	// Messages from colleagues.
 	if len(obs.Messages) > 0 {
 		sb.WriteString("### Messages from Colleagues\n")
 		for _, m := range obs.Messages {
@@ -220,8 +261,38 @@ func (c *AgentCycle) buildObservationSummary(obs *Observations) string {
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\nReview the observations above and take appropriate action using your tools.")
+	// Recent memories.
+	if len(obs.Memories) > 0 {
+		sb.WriteString("### Your Recent Activity\n")
+		for _, m := range obs.Memories {
+			sb.WriteString(fmt.Sprintf("- %s\n", m.Content))
+		}
+		sb.WriteString("\n")
+	}
+
+	// If truly nothing is happening.
+	if len(obs.Tasks) == 0 && len(obs.SlackEvents) == 0 && len(obs.Messages) == 0 &&
+		len(obs.WorkItems) == 0 {
+		sb.WriteString("No new tasks, messages, or work items. Review your team and company state. If everything is in order, respond with a brief status update.\n")
+	}
+
+	sb.WriteString("\nWhat should you do? Use your tools to take action.")
 	return sb.String()
+}
+
+// loadSessionState reads the persistent session state from the AE's scratch directory.
+func (c *AgentCycle) loadSessionState() string {
+	path := filepath.Join(c.ScratchPath, "session_state.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "" // no session state yet
+	}
+	content := string(data)
+	// Cap at ~2000 chars to avoid bloating the prompt.
+	if len(content) > 2000 {
+		content = content[:2000] + "\n...[truncated]"
+	}
+	return content
 }
 
 // executeTool dispatches a tool call to either the local executor or Rally.
@@ -401,6 +472,29 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 			resultContent = string(data)
 		}
 
+	// --- Hiring ---
+	case "ProposeHire":
+		role, _ := tc.Input["role"].(string)
+		dept, _ := tc.Input["department"].(string)
+		rationale, _ := tc.Input["rationale"].(string)
+		reportsTo, _ := tc.Input["reports_to"].(string)
+		data, err := c.Rally.ProposeHire(ctx, role, dept, rationale, reportsTo)
+		if err != nil {
+			resultContent = fmt.Sprintf("Error: %s", err.Error())
+			isError = true
+		} else {
+			resultContent = string(data)
+		}
+
+	case "ListTeam":
+		data, err := c.Rally.ListTeam(ctx)
+		if err != nil {
+			resultContent = fmt.Sprintf("Error: %s", err.Error())
+			isError = true
+		} else {
+			resultContent = string(data)
+		}
+
 	case "BrowserNavigate":
 		result, err := c.LocalTools.execBrowser(ctx, "navigate", tc.Input)
 		if err != nil {
@@ -412,7 +506,7 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 		}
 
 	default:
-		// Check if this is a remote tool (name matches a RemoteToolDef).
+		// Check remote tools.
 		if gwTool, gwAction, ok := c.resolveRemoteTool(tc.Name); ok {
 			result, err := c.Rally.ExecuteRemoteTool(ctx, gwTool, gwAction, tc.Input)
 			if err != nil {
@@ -428,7 +522,6 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 		}
 	}
 
-	// Truncate very large results to avoid blowing up context.
 	if len(resultContent) > 16000 {
 		resultContent = resultContent[:16000] + "\n...[truncated, use offset/limit to read more]"
 	}
@@ -440,8 +533,7 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 	}
 }
 
-// resolveRemoteTool looks up a tool name in the remote tool definitions
-// and returns the gateway tool and action names. Returns false if not found.
+// resolveRemoteTool looks up a tool name in the remote tool definitions.
 func (c *AgentCycle) resolveRemoteTool(name string) (tool, action string, ok bool) {
 	for _, rt := range c.RemoteToolDefs {
 		if rt.Name == name {
@@ -452,15 +544,12 @@ func (c *AgentCycle) resolveRemoteTool(name string) (tool, action string, ok boo
 }
 
 // microcompact performs lightweight context compaction.
-// It replaces tool results older than the last keepLast with a short placeholder,
-// reducing token usage without needing an LLM call.
 func microcompact(messages []ChatMessage, keepLast ...int) []ChatMessage {
 	keep := 3
 	if len(keepLast) > 0 && keepLast[0] > 0 {
 		keep = keepLast[0]
 	}
 
-	// Count tool result messages from the end.
 	toolResultIndices := []int{}
 	for i := len(messages) - 1; i >= 0; i-- {
 		if len(messages[i].ToolResults) > 0 {
@@ -469,23 +558,20 @@ func microcompact(messages []ChatMessage, keepLast ...int) []ChatMessage {
 	}
 
 	if len(toolResultIndices) <= keep {
-		return messages // nothing to compact
+		return messages
 	}
 
-	// Estimate total token size of tool results.
 	totalTokens := 0
 	for _, idx := range toolResultIndices {
 		for _, tr := range messages[idx].ToolResults {
-			totalTokens += len(tr.Content) / 4 // rough estimate
+			totalTokens += len(tr.Content) / 4
 		}
 	}
 
-	// Only compact if over threshold.
 	if totalTokens < 40000 {
 		return messages
 	}
 
-	// Replace old tool results (beyond the last `keep`) with placeholders.
 	oldIndices := toolResultIndices[keep:]
 	compacted := make([]ChatMessage, len(messages))
 	copy(compacted, messages)

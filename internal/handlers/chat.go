@@ -10,6 +10,7 @@ import (
 
 	"github.com/17twenty/rally/internal/agent"
 	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/internal/llm"
 	"github.com/17twenty/rally/internal/memory"
@@ -23,6 +24,8 @@ type ChatHandler struct {
 	LLMRouter *llm.Router
 }
 
+func (h *ChatHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
+
 const rallySystemPrompt = "You are Rally, an intelligent operating system for organizations. You help users understand their organization, monitor AE agents, review logs, and coordinate work. Be concise and helpful."
 
 // Show handles GET /chat.
@@ -33,29 +36,32 @@ func (h *ChatHandler) Show(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
 		// Load all companies
-		compRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, name, COALESCE(mission,''), status, created_at FROM companies ORDER BY created_at DESC`)
-		if err == nil {
-			defer compRows.Close()
-			for compRows.Next() {
-				var c domain.Company
-				if scanErr := compRows.Scan(&c.ID, &c.Name, &c.Mission, &c.Status, &c.CreatedAt); scanErr == nil {
-					data.Companies = append(data.Companies, c)
-				}
+		if companies, err := h.q().ListCompanies(ctx); err == nil {
+			for _, c := range companies {
+				data.Companies = append(data.Companies, domain.Company{
+					ID:        c.ID,
+					Name:      c.Name,
+					Mission:   db.Deref(c.Mission),
+					Status:    c.Status,
+					CreatedAt: db.PgTime(c.CreatedAt),
+				})
 			}
 		}
 
-		// Load all employees (AEs only — humans don't have LLM configs)
-		empRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''), type, status, COALESCE(slack_user_id,''), created_at
-			 FROM employees ORDER BY created_at ASC`)
-		if err == nil {
-			defer empRows.Close()
-			for empRows.Next() {
-				var e domain.Employee
-				if scanErr := empRows.Scan(&e.ID, &e.CompanyID, &e.Name, &e.Role, &e.Specialties, &e.Type, &e.Status, &e.SlackUserID, &e.CreatedAt); scanErr == nil {
-					data.Employees = append(data.Employees, e)
-				}
+		// Load all employees
+		if employees, err := h.q().ListAllEmployeesByCreatedAt(ctx); err == nil {
+			for _, e := range employees {
+				data.Employees = append(data.Employees, domain.Employee{
+					ID:          e.ID,
+					CompanyID:   e.CompanyID,
+					Name:        db.Deref(e.Name),
+					Role:        e.Role,
+					Specialties: db.Deref(e.Specialties),
+					Type:        e.Type,
+					Status:      e.Status,
+					SlackUserID: db.Deref(e.SlackUserID),
+					CreatedAt:   db.PgTime(e.CreatedAt),
+				})
 			}
 		}
 
@@ -105,42 +111,27 @@ func (h *ChatHandler) Message(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString(rallySystemPrompt)
 		sb.WriteString("\n\n## Current organization state\n")
 
-		compRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, name, COALESCE(mission,''), status FROM companies ORDER BY created_at DESC`)
+		companies, err := h.q().ListCompanies(ctx)
 		if err == nil {
-			var hasCompanies bool
-			for compRows.Next() {
-				var id, name, mission, status string
-				if compRows.Scan(&id, &name, &mission, &status) == nil {
-					if !hasCompanies {
-						sb.WriteString("\n### Companies\n")
-						hasCompanies = true
-					}
-					sb.WriteString(fmt.Sprintf("- %s (status: %s)", name, status))
-					if mission != "" {
-						sb.WriteString(fmt.Sprintf(" — %s", mission))
-					}
-					sb.WriteString("\n")
+			hasCompanies := len(companies) > 0
+			for _, c := range companies {
+				sb.WriteString(fmt.Sprintf("- %s (status: %s)", c.Name, c.Status))
+				if c.Mission != nil && *c.Mission != "" {
+					sb.WriteString(fmt.Sprintf(" — %s", *c.Mission))
+				}
+				sb.WriteString("\n")
 
-					// Employees for this company
-					empRows, empErr := h.DB.Pool.Query(ctx,
-						`SELECT COALESCE(name,''), role, type, status FROM employees WHERE company_id = $1 ORDER BY created_at ASC`, id)
-					if empErr == nil {
-						for empRows.Next() {
-							var eName, eRole, eType, eStatus string
-							if empRows.Scan(&eName, &eRole, &eType, &eStatus) == nil {
-								label := eName
-								if label == "" {
-									label = eRole
-								}
-								sb.WriteString(fmt.Sprintf("  - %s (role: %s, type: %s, status: %s)\n", label, eRole, eType, eStatus))
-							}
+				// Employees for this company
+				if emps, empErr := h.q().ListEmployeesByCompany(ctx, c.ID); empErr == nil {
+					for _, e := range emps {
+						label := db.Deref(e.Name)
+						if label == "" {
+							label = e.Role
 						}
-						empRows.Close()
+						sb.WriteString(fmt.Sprintf("  - %s (role: %s, type: %s, status: %s)\n", label, e.Role, e.Type, e.Status))
 					}
 				}
 			}
-			compRows.Close()
 			if !hasCompanies {
 				sb.WriteString("\nNo companies have been created yet. The database is empty.\n")
 			}
@@ -152,36 +143,38 @@ func (h *ChatHandler) Message(w http.ResponseWriter, r *http.Request) {
 
 	// If ae_id provided, load employee + config and build system prompt.
 	if req.AEID != "" && h.DB != nil {
-		var emp domain.Employee
-		err := h.DB.Pool.QueryRow(ctx,
-			`SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''), type, status, COALESCE(slack_user_id,''), created_at
-			 FROM employees WHERE id = $1`, req.AEID,
-		).Scan(&emp.ID, &emp.CompanyID, &emp.Name, &emp.Role, &emp.Specialties, &emp.Type, &emp.Status, &emp.SlackUserID, &emp.CreatedAt)
+		daoEmp, err := h.q().GetEmployee(ctx, req.AEID)
 		if err == nil {
+			emp := domain.Employee{
+				ID:          daoEmp.ID,
+				CompanyID:   daoEmp.CompanyID,
+				Name:        db.Deref(daoEmp.Name),
+				Role:        daoEmp.Role,
+				Specialties: db.Deref(daoEmp.Specialties),
+				Type:        daoEmp.Type,
+				Status:      daoEmp.Status,
+				SlackUserID: db.Deref(daoEmp.SlackUserID),
+				CreatedAt:   db.PgTime(daoEmp.CreatedAt),
+			}
+
 			senderName = emp.Name
 			if senderName == "" {
 				senderName = emp.Role
 			}
 
 			// Load employee config for soul content
-			var cfgRaw []byte
-			cfgErr := h.DB.Pool.QueryRow(ctx,
-				`SELECT config FROM employee_configs WHERE employee_id = $1 LIMIT 1`, emp.ID,
-			).Scan(&cfgRaw)
+			ecRow, cfgErr := h.q().GetEmployeeConfig(ctx, emp.ID)
 
 			var cfg domain.EmployeeConfig
-			if cfgErr == nil && len(cfgRaw) > 0 {
-				_ = json.Unmarshal(cfgRaw, &cfg)
+			if cfgErr == nil && len(ecRow.Config) > 0 {
+				_ = json.Unmarshal(ecRow.Config, &cfg)
 			}
 
 			if cfg.Cognition.DefaultModelRef != "" {
 				modelRef = cfg.Cognition.DefaultModelRef
 			}
 
-			var policyDoc string
-			_ = h.DB.Pool.QueryRow(ctx,
-				`SELECT COALESCE(policy_doc,'') FROM companies WHERE id = $1`, emp.CompanyID,
-			).Scan(&policyDoc)
+			policyDoc, _ := h.q().GetCompanyPolicy(ctx, emp.CompanyID)
 
 			systemPrompt = agent.BuildSystemPrompt(emp, cfg, cfg.Identity.SoulFile, policyDoc)
 		}
@@ -305,6 +298,7 @@ func (h *ChatHandler) History(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch last 20 episodic memory events that start with [CHAT], for any
 	// employee in this company (or the rally virtual employee for this company).
+	// Dynamic query with subquery — stays as raw SQL.
 	rows, err := h.DB.Pool.Query(ctx, `
 		SELECT me.employee_id, me.content, me.created_at
 		FROM memory_events me
@@ -398,6 +392,7 @@ func (h *ChatHandler) executeChatTool(ctx context.Context, tc llm.ToolCall, empl
 		if h.DB == nil {
 			return llm.ToolResult{ToolUseID: tc.ID, Content: "Database not available", IsError: true}
 		}
+		// Dynamic WHERE clause — stays as raw SQL.
 		status, _ := tc.Input["status"].(string)
 		query := `SELECT id, title, status, priority, updated_at FROM work_items WHERE owner_id = $1`
 		args := []any{employeeID}

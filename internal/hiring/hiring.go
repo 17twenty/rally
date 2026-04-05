@@ -105,6 +105,10 @@ func (h *Hirer) HireAE(ctx context.Context, companyID string, plan org.PlannedRo
 		containerName := container.ContainerName(company.Name, plan.Role, aeName)
 		cfgJSONStr := string(cfgJSON)
 
+		// Load policy for workspace seeding.
+		var policyDoc string
+		_ = h.DB.QueryRow(ctx, `SELECT COALESCE(policy_doc,'') FROM companies WHERE id = $1`, companyID).Scan(&policyDoc)
+
 		token, tokenHash, tokenErr := container.GenerateAPIToken()
 		if tokenErr != nil {
 			slog.Warn("hiring: generate API token failed", "err", tokenErr)
@@ -114,15 +118,17 @@ func (h *Hirer) HireAE(ctx context.Context, companyID string, plan org.PlannedRo
 				slog.Warn("hiring: store API token failed", "err", storeErr)
 			} else {
 				containerID, startErr := h.ContainerManager.CreateAndStart(ctx, container.CreateAndStartOpts{
-					ContainerName: containerName,
-					EmployeeID:    employeeID,
-					CompanyID:     companyID,
-					CompanyName:   company.Name,
-					Role:          plan.Role,
-					AEName:        aeName,
-					APIToken:      token,
-					SoulMD:        soulMD,
-					ConfigJSON:    cfgJSONStr,
+					ContainerName:  containerName,
+					EmployeeID:     employeeID,
+					CompanyID:      companyID,
+					CompanyName:    company.Name,
+					CompanyMission: company.Mission,
+					Role:           plan.Role,
+					AEName:         aeName,
+					APIToken:       token,
+					SoulMD:         soulMD,
+					ConfigJSON:     cfgJSONStr,
+					PolicyDoc:      policyDoc,
 				})
 				if startErr != nil {
 					slog.Warn("hiring: container start failed", "err", startErr, "name", containerName)

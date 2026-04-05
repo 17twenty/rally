@@ -7,10 +7,12 @@ import (
 	"github.com/a-h/templ"
 
 	"github.com/17twenty/rally/internal/db"
-	"github.com/17twenty/rally/internal/domain"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/vault"
 	"github.com/17twenty/rally/templates/pages"
 )
+
+func (h *CredentialHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
 
 // CredentialHandler manages credential vault UI and API endpoints.
 type CredentialHandler struct {
@@ -26,24 +28,15 @@ func (h *CredentialHandler) List(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
 		// Load employees for the dropdown and for name resolution
-		empRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''), type, status, COALESCE(slack_user_id,''), created_at
-			 FROM employees ORDER BY type, role`)
 		empNames := map[string]string{}
-		if err == nil {
-			defer empRows.Close()
-			for empRows.Next() {
-				var e domain.Employee
-				if scanErr := empRows.Scan(
-					&e.ID, &e.CompanyID, &e.Name, &e.Role, &e.Specialties, &e.Type, &e.Status, &e.SlackUserID, &e.CreatedAt,
-				); scanErr == nil {
-					displayName := e.Name
-					if displayName == "" {
-						displayName = e.Role
-					}
-					empNames[e.ID] = displayName
-					data.Employees = append(data.Employees, pages.EmployeeOption{ID: e.ID, Name: displayName})
+		if emps, err := h.q().ListAllEmployees(ctx); err == nil {
+			for _, e := range emps {
+				displayName := db.Deref(e.Name)
+				if displayName == "" {
+					displayName = e.Role
 				}
+				empNames[e.ID] = displayName
+				data.Employees = append(data.Employees, pages.EmployeeOption{ID: e.ID, Name: displayName})
 			}
 		}
 
@@ -111,9 +104,9 @@ func (h *CredentialHandler) Store(w http.ResponseWriter, r *http.Request) {
 	// Resolve company_id from the employee record
 	companyID := ""
 	if h.DB != nil {
-		_ = h.DB.Pool.QueryRow(r.Context(),
-			`SELECT COALESCE(company_id,'') FROM employees WHERE id = $1`, employeeID,
-		).Scan(&companyID)
+		if emp, err := h.q().GetEmployee(r.Context(), employeeID); err == nil {
+			companyID = emp.CompanyID
+		}
 	}
 
 	if h.Vault == nil {

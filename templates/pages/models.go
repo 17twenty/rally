@@ -69,6 +69,24 @@ type AgentDetailData struct {
 	RecentLogs   []ToolLogRow
 }
 
+// ProposedHireRow is a display-friendly view of a proposed hire.
+type ProposedHireRow struct {
+	ID           string
+	Role         string
+	Department   string
+	Rationale    string
+	ReportsTo    string
+	Status       string
+	ProposerName string
+	CreatedAt    time.Time
+}
+
+// SettingsData holds data for the settings page (shown when company exists).
+type SettingsData struct {
+	Company        domain.Company
+	SlackConnected bool
+}
+
 // LogsPageData holds data for the log viewer page.
 type LogsPageData struct {
 	Logs           []ToolLogRow

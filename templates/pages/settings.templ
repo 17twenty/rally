@@ -1,0 +1,165 @@
+package pages
+
+import (
+	"github.com/17twenty/rally/components/badge"
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/separator"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ Settings(data SettingsData) {
+	@layout.Page("Settings") {
+		<div class="max-w-2xl mx-auto space-y-6">
+			<div class="space-y-1">
+				<h1 class="text-2xl font-bold">Settings</h1>
+				<p class="text-sm text-muted-foreground">Manage your Rally instance and connected integrations.</p>
+			</div>
+
+			<!-- Company Info -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Organisation
+					}
+				}
+				@card.Content() {
+					<div class="space-y-2 text-sm">
+						<div class="flex justify-between">
+							<span class="text-muted-foreground">Company</span>
+							<span class="font-medium">{ data.Company.Name }</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-muted-foreground">Status</span>
+							<span>
+								if data.Company.Status == "active" {
+									@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+										active
+									}
+								} else {
+									@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+										{ data.Company.Status }
+									}
+								}
+							</span>
+						</div>
+						if data.Company.Mission != "" {
+							<div class="flex justify-between">
+								<span class="text-muted-foreground">Mission</span>
+								<span class="text-right max-w-[300px]">{ data.Company.Mission }</span>
+							</div>
+						}
+					</div>
+				}
+			}
+
+			@separator.Separator() {}
+
+			<!-- Integrations -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Integrations
+					}
+					@card.Description() {
+						Connect Rally to your tools
+					}
+				}
+				@card.Content() {
+					<div class="space-y-4">
+						<!-- Slack -->
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-3">
+								<div class="h-8 w-8 rounded bg-[#4A154B] flex items-center justify-center text-white text-xs font-bold">S</div>
+								<div>
+									<p class="text-sm font-medium">Slack</p>
+									<p class="text-xs text-muted-foreground">AEs communicate with your team via Slack</p>
+								</div>
+							</div>
+							if data.SlackConnected {
+								@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+									Connected
+								}
+							} else {
+								@button.Button(button.Props{Href: "/slack/install", Size: button.SizeSm, Variant: button.VariantOutline}) {
+									Connect
+								}
+							}
+						</div>
+
+						<!-- Google Workspace -->
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-3">
+								<div class="h-8 w-8 rounded bg-blue-500 flex items-center justify-center text-white text-xs font-bold">G</div>
+								<div>
+									<p class="text-sm font-medium">Google Workspace</p>
+									<p class="text-xs text-muted-foreground">Gmail, Docs, Drive, Calendar</p>
+								</div>
+							</div>
+							@button.Button(button.Props{Href: "/oauth/google", Size: button.SizeSm, Variant: button.VariantOutline}) {
+								Connect
+							}
+						</div>
+
+						<!-- GitHub -->
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-3">
+								<div class="h-8 w-8 rounded bg-gray-900 flex items-center justify-center text-white text-xs font-bold">GH</div>
+								<div>
+									<p class="text-sm font-medium">GitHub</p>
+									<p class="text-xs text-muted-foreground">Manage via Credentials page</p>
+								</div>
+							</div>
+							@button.Button(button.Props{Href: "/credentials", Size: button.SizeSm, Variant: button.VariantOutline}) {
+								Manage
+							}
+						</div>
+
+						<!-- Figma -->
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-3">
+								<div class="h-8 w-8 rounded bg-purple-500 flex items-center justify-center text-white text-xs font-bold">F</div>
+								<div>
+									<p class="text-sm font-medium">Figma</p>
+									<p class="text-xs text-muted-foreground">Design file access for AEs</p>
+								</div>
+							</div>
+							@button.Button(button.Props{Href: "/oauth/figma", Size: button.SizeSm, Variant: button.VariantOutline}) {
+								Connect
+							}
+						</div>
+					</div>
+				}
+			}
+
+			@separator.Separator() {}
+
+			<!-- Danger Zone -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Danger Zone
+					}
+				}
+				@card.Content() {
+					<div class="flex items-center justify-between gap-4">
+						<div class="min-w-0">
+							<p class="text-sm font-medium text-destructive">Delete Organisation</p>
+							<p class="text-xs text-muted-foreground">Remove all data, stop all AE containers, and start fresh.</p>
+						</div>
+						<form
+							method="POST"
+							action={ templ.SafeURL("/companies/" + data.Company.ID + "/nuke") }
+							onsubmit="return confirm('Are you sure? This will permanently delete all data including employees, tasks, and work items.')"
+							class="shrink-0"
+						>
+							@button.Button(button.Props{Variant: button.VariantDestructive, Size: button.SizeSm, Type: button.TypeSubmit}) {
+								Delete Everything
+							}
+						</form>
+					</div>
+				}
+			}
+		</div>
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/internal/kb"
 	"github.com/17twenty/rally/internal/org"
@@ -20,14 +21,38 @@ type SetupHandler struct {
 	Vault *vault.CredentialVault
 }
 
+func (h *SetupHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
+
 // Show handles GET /setup.
-// Redirects to / if any company already exists, otherwise renders the setup wizard.
+// If no company exists, shows the setup wizard. Otherwise shows the Settings page.
 func (h *SetupHandler) Show(w http.ResponseWriter, r *http.Request) {
 	if h.DB != nil {
-		var count int
-		_ = h.DB.Pool.QueryRow(r.Context(), `SELECT COUNT(*) FROM companies`).Scan(&count)
+		ctx := r.Context()
+		count, _ := h.q().CountCompanies(ctx)
 		if count > 0 {
-			http.Redirect(w, r, "/?msg=Rally+is+already+set+up", http.StatusSeeOther)
+			// Show settings page with company info and integration status.
+			companies, _ := h.q().ListCompanies(ctx)
+			var company domain.Company
+			if len(companies) > 0 {
+				c := companies[0]
+				company = domain.Company{
+					ID: c.ID, Name: c.Name, Mission: db.Deref(c.Mission),
+					Status: c.Status, CreatedAt: db.PgTime(c.CreatedAt),
+				}
+			}
+
+			// Check integration status.
+			slackConnected := false
+			if h.Vault != nil {
+				if _, err := h.Vault.Get(ctx, "rally-system", "slack"); err == nil {
+					slackConnected = true
+				}
+			}
+
+			templ.Handler(pages.Settings(pages.SettingsData{
+				Company:        company,
+				SlackConnected: slackConnected,
+			})).ServeHTTP(w, r)
 			return
 		}
 	}
@@ -55,6 +80,7 @@ func (h *SetupHandler) Create(w http.ResponseWriter, r *http.Request) {
 		founderRole = "Founder"
 	}
 	founderSlackID := r.FormValue("founder_slack_id")
+	policy := r.FormValue("policy")
 	githubRepo := r.FormValue("github_repo")
 	githubToken := r.FormValue("github_token")
 
@@ -66,8 +92,7 @@ func (h *SetupHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if already set up.
-	var count int
-	_ = h.DB.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM companies`).Scan(&count)
+	count, _ := h.q().CountCompanies(ctx)
 	if count > 0 {
 		http.Redirect(w, r, "/?msg=Rally+is+already+set+up", http.StatusSeeOther)
 		return
@@ -75,22 +100,34 @@ func (h *SetupHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Create company row (status='active').
 	companyID := newID()
-	_, err := h.DB.Pool.Exec(ctx,
-		`INSERT INTO companies (id, name, mission, status) VALUES ($1, $2, $3, 'active')`,
-		companyID, companyName, mission,
-	)
+	_, err := h.q().InsertCompany(ctx, dao.InsertCompanyParams{
+		ID:      companyID,
+		Name:    companyName,
+		Mission: db.Ref(mission),
+		Status:  "active",
+	})
 	if err != nil {
 		http.Error(w, "failed to create company: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Set company policy if provided.
+	if policy != "" {
+		_ = h.q().UpdateCompanyPolicy(ctx, dao.UpdateCompanyPolicyParams{ID: companyID, PolicyDoc: db.Ref(policy)})
+	}
+
 	// 2. Create human founder employee row.
 	founderID := newID()
-	_, err = h.DB.Pool.Exec(ctx,
-		`INSERT INTO employees (id, company_id, name, role, specialties, type, status, slack_user_id)
-		 VALUES ($1, $2, $3, $4, '', 'human', 'active', $5)`,
-		founderID, companyID, founderName, founderRole, founderSlackID,
-	)
+	_, err = h.q().InsertEmployee(ctx, dao.InsertEmployeeParams{
+		ID:          founderID,
+		CompanyID:   companyID,
+		Role:        founderRole,
+		Type:        "human",
+		Status:      "active",
+		SlackUserID: db.Ref(founderSlackID),
+		Name:        db.Ref(founderName),
+		Specialties: db.Ref(""),
+	})
 	if err != nil {
 		http.Error(w, "failed to create founder employee: "+err.Error(), http.StatusInternalServerError)
 		return

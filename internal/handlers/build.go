@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/internal/hiring"
 	"github.com/17twenty/rally/internal/org"
@@ -24,13 +26,14 @@ func (h *CompanyHandler) Build(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ctx := r.Context()
 
-	var company domain.Company
-	err := h.DB.Pool.QueryRow(ctx,
-		`SELECT id, name, COALESCE(mission,''), status, created_at FROM companies WHERE id = $1`, id,
-	).Scan(&company.ID, &company.Name, &company.Mission, &company.Status, &company.CreatedAt)
+	c, err := h.q().GetCompany(ctx, id)
 	if err != nil {
 		http.Error(w, `{"error":"company not found"}`, http.StatusNotFound)
 		return
+	}
+	company := domain.Company{
+		ID: c.ID, Name: c.Name, Mission: db.Deref(c.Mission),
+		Status: c.Status, CreatedAt: db.PgTime(c.CreatedAt),
 	}
 
 	if company.Status != "pending" {
@@ -40,21 +43,17 @@ func (h *CompanyHandler) Build(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	humanRows, err := h.DB.Pool.Query(ctx,
-		`SELECT id, COALESCE(name,''), role FROM employees WHERE company_id = $1 AND type = 'human'`, id)
+	humanRows, err := h.q().ListHumanEmployeesByCompany(ctx, id)
 	if err != nil {
 		http.Error(w, `{"error":"failed to load employees"}`, http.StatusInternalServerError)
 		return
 	}
 	var humans []domain.Employee
-	for humanRows.Next() {
-		var e domain.Employee
-		if scanErr := humanRows.Scan(&e.ID, &e.Name, &e.Role); scanErr == nil {
-			e.Type = "human"
-			humans = append(humans, e)
-		}
+	for _, e := range humanRows {
+		humans = append(humans, domain.Employee{
+			ID: e.ID, Name: db.Deref(e.Name), Role: e.Role, Type: "human",
+		})
 	}
-	humanRows.Close()
 
 	mgr := org.NewOrgManager()
 	plan, err := mgr.DesignOrg(company, humans)
@@ -96,7 +95,7 @@ func (h *CompanyHandler) Build(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update company status to 'active' after successful hiring
-	_, _ = h.DB.Pool.Exec(ctx, `UPDATE companies SET status = 'active' WHERE id = $1`, id)
+	_ = h.q().UpdateCompanyStatus(ctx, dao.UpdateCompanyStatusParams{ID: id, Status: "active"})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -116,20 +115,18 @@ func (h *CompanyHandler) Status(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ctx := r.Context()
 
-	var companyStatus string
-	err := h.DB.Pool.QueryRow(ctx, `SELECT status FROM companies WHERE id = $1`, id).Scan(&companyStatus)
+	c, err := h.q().GetCompany(ctx, id)
 	if err != nil {
 		http.Error(w, `{"error":"company not found"}`, http.StatusNotFound)
 		return
 	}
+	companyStatus := c.Status
 
-	rows, err := h.DB.Pool.Query(ctx,
-		`SELECT id, COALESCE(name,''), role, type, status FROM employees WHERE company_id = $1 ORDER BY created_at ASC`, id)
+	empRows, err := h.q().ListEmployeesByCompany(ctx, id)
 	if err != nil {
 		http.Error(w, `{"error":"failed to load employees"}`, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
 	type empJSON struct {
 		ID     string `json:"id"`
@@ -141,13 +138,12 @@ func (h *CompanyHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 	var employees []empJSON
 	var aeCount int
-	for rows.Next() {
-		var e empJSON
-		if scanErr := rows.Scan(&e.ID, &e.Name, &e.Role, &e.Type, &e.Status); scanErr == nil {
-			employees = append(employees, e)
-			if e.Type == "ae" {
-				aeCount++
-			}
+	for _, e := range empRows {
+		employees = append(employees, empJSON{
+			ID: e.ID, Name: db.Deref(e.Name), Role: e.Role, Type: e.Type, Status: e.Status,
+		})
+		if e.Type == "ae" {
+			aeCount++
 		}
 	}
 

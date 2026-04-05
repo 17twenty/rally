@@ -213,6 +213,12 @@ func main() {
 	mux.Handle("POST /api/ae/escalate", aeAuth(aeAPI.Escalate))
 	mux.Handle("POST /api/ae/messages", aeAuth(aeAPI.AESendMessage))
 	mux.Handle("PATCH /api/ae/tasks/{id}", aeAuth(aeAPI.UpdateTask))
+	mux.Handle("POST /api/ae/propose-hire", aeAuth(aeAPI.ProposeHire))
+	mux.Handle("GET /api/ae/team", aeAuth(aeAPI.ListTeam))
+
+	// Hire approval (web UI, not AE auth)
+	mux.HandleFunc("POST /companies/{id}/hires/{hire_id}/approve", aeAPI.ApproveHire)
+	mux.HandleFunc("POST /companies/{id}/hires/{hire_id}/reject", aeAPI.RejectHire)
 
 	// Wrap all handlers with request logger middleware
 	handler := observability.RequestLogger(mux)

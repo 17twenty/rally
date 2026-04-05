@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/a-h/templ"
 
 	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/templates/pages"
 )
@@ -20,36 +20,25 @@ type AgentHandler struct {
 	DB *db.DB
 }
 
+func (h *AgentHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
+
 // List handles GET /agents.
 func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	data := pages.AgentsPageData{}
 
 	if h.DB != nil {
 		ctx := r.Context()
-		rows, err := h.DB.Pool.Query(ctx, `
-			SELECT e.id, e.company_id, COALESCE(e.name,''), e.role, COALESCE(e.specialties,''),
-			       e.type, e.status, COALESCE(e.slack_user_id,''), e.created_at,
-			       MAX(tl.created_at) as last_active
-			FROM employees e
-			LEFT JOIN tool_logs tl ON tl.employee_id = e.id
-			GROUP BY e.id, e.company_id, e.name, e.role, e.specialties, e.type, e.status, e.slack_user_id, e.created_at
-			ORDER BY e.type, e.created_at DESC
-		`)
+		rows, err := h.q().ListAllEmployeesWithLastActive(ctx)
 		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var ac pages.AgentCard
-				var lastActive *time.Time
-				if scanErr := rows.Scan(
-					&ac.Employee.ID, &ac.Employee.CompanyID, &ac.Employee.Name, &ac.Employee.Role,
-					&ac.Employee.Specialties, &ac.Employee.Type, &ac.Employee.Status,
-					&ac.Employee.SlackUserID, &ac.Employee.CreatedAt, &lastActive,
-				); scanErr == nil {
-					if lastActive != nil {
-						ac.LastActive = *lastActive
-					}
-					data.Agents = append(data.Agents, ac)
+			for _, row := range rows {
+				ac := pages.AgentCard{
+					Employee: daoAERowToEmployee(row.ID, row.CompanyID, row.Name, row.Role,
+						row.Specialties, row.Type, row.Status, row.SlackUserID, db.PgTime(row.CreatedAt)),
 				}
+				if t, ok := row.LastActive.(time.Time); ok {
+					ac.LastActive = t
+				}
+				data.Agents = append(data.Agents, ac)
 			}
 		}
 	}
@@ -69,30 +58,32 @@ func (h *AgentHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	data := pages.AgentDetailData{}
 
 	// Load employee
-	err := h.DB.Pool.QueryRow(ctx,
-		`SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''), type, status, COALESCE(slack_user_id,''), created_at
-		 FROM employees WHERE id = $1`, id,
-	).Scan(
-		&data.Employee.ID, &data.Employee.CompanyID, &data.Employee.Name, &data.Employee.Role,
-		&data.Employee.Specialties, &data.Employee.Type, &data.Employee.Status,
-		&data.Employee.SlackUserID, &data.Employee.CreatedAt,
-	)
+	emp, err := h.q().GetEmployee(ctx, id)
 	if err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
+	data.Employee = domain.Employee{
+		ID:          emp.ID,
+		CompanyID:   emp.CompanyID,
+		Name:        db.Deref(emp.Name),
+		Role:        emp.Role,
+		Specialties: db.Deref(emp.Specialties),
+		Type:        emp.Type,
+		Status:      emp.Status,
+		SlackUserID: db.Deref(emp.SlackUserID),
+		CreatedAt:   db.PgTime(emp.CreatedAt),
+	}
 
 	// Load config — extract soul content and format as YAML
-	var configJSON []byte
-	if scanErr := h.DB.Pool.QueryRow(ctx,
-		`SELECT config FROM employee_configs WHERE employee_id = $1 ORDER BY created_at DESC LIMIT 1`, id,
-	).Scan(&configJSON); scanErr == nil && len(configJSON) > 0 {
+	ecRow, err := h.q().GetEmployeeConfig(ctx, id)
+	if err == nil && len(ecRow.Config) > 0 {
 		var cfg domain.EmployeeConfig
-		if jsonErr := json.Unmarshal(configJSON, &cfg); jsonErr == nil {
+		if jsonErr := json.Unmarshal(ecRow.Config, &cfg); jsonErr == nil {
 			data.SoulContent = cfg.Identity.SoulFile
 		}
 		var raw map[string]any
-		if jsonErr := json.Unmarshal(configJSON, &raw); jsonErr == nil {
+		if jsonErr := json.Unmarshal(ecRow.Config, &raw); jsonErr == nil {
 			if yamlBytes, yamlErr := yaml.Marshal(raw); yamlErr == nil {
 				data.ConfigYAML = string(yamlBytes)
 			}
@@ -100,54 +91,58 @@ func (h *AgentHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load active work items
-	wiRows, err := h.DB.Pool.Query(ctx,
-		`SELECT id, title, status, priority, updated_at FROM work_items
-		 WHERE owner_id = $1 AND status NOT IN ('cancelled')
-		 ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2 ELSE 3 END,
-		 CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-		 updated_at DESC LIMIT 20`, id)
+	wiRows, err := h.q().ListWorkItemsByOwnerNotCancelled(ctx, id)
 	if err == nil {
-		defer wiRows.Close()
-		for wiRows.Next() {
-			var wi pages.WorkItemRow
-			if scanErr := wiRows.Scan(&wi.ID, &wi.Title, &wi.Status, &wi.Priority, &wi.UpdatedAt); scanErr == nil {
-				data.WorkItems = append(data.WorkItems, wi)
-			}
+		for _, row := range wiRows {
+			data.WorkItems = append(data.WorkItems, pages.WorkItemRow{
+				ID:        row.ID,
+				Title:     row.Title,
+				Status:    row.Status,
+				Priority:  row.Priority,
+				UpdatedAt: db.PgTime(row.UpdatedAt),
+			})
 		}
 	}
 
 	// Load recent memory events
-	memRows, err := h.DB.Pool.Query(ctx,
-		`SELECT id, employee_id, type, content, created_at FROM memory_events
-		 WHERE employee_id = $1 ORDER BY created_at DESC LIMIT 10`, id)
+	memRows, err := h.q().GetRecentMemoryEvents(ctx, dao.GetRecentMemoryEventsParams{
+		EmployeeID: id,
+		Limit:      10,
+	})
 	if err == nil {
-		defer memRows.Close()
-		for memRows.Next() {
-			var m domain.MemoryEvent
-			if scanErr := memRows.Scan(&m.ID, &m.EmployeeID, &m.Type, &m.Content, &m.CreatedAt); scanErr == nil {
-				data.MemoryEvents = append(data.MemoryEvents, m)
-			}
+		for _, row := range memRows {
+			data.MemoryEvents = append(data.MemoryEvents, domain.MemoryEvent{
+				ID:         row.ID,
+				EmployeeID: row.EmployeeID,
+				Type:       row.Type,
+				Content:    row.Content,
+				CreatedAt:  db.PgTime(row.CreatedAt),
+			})
 		}
 	}
 
 	// Load recent tool logs
-	logRows, err := h.DB.Pool.Query(ctx,
-		`SELECT id, employee_id, tool, action, success, COALESCE(trace_id,''), COALESCE(task_id,''), created_at
-		 FROM tool_logs WHERE employee_id = $1 ORDER BY created_at DESC LIMIT 20`, id)
+	tlRows, err := h.q().GetToolLogsByEmployee(ctx, dao.GetToolLogsByEmployeeParams{
+		EmployeeID: id,
+		Limit:      20,
+	})
 	if err == nil {
-		defer logRows.Close()
 		empName := data.Employee.Name
 		if empName == "" {
 			empName = data.Employee.Role
 		}
-		for logRows.Next() {
-			var l pages.ToolLogRow
-			if scanErr := logRows.Scan(
-				&l.ID, &l.EmployeeID, &l.Tool, &l.Action, &l.Success, &l.TraceID, &l.TaskID, &l.CreatedAt,
-			); scanErr == nil {
-				l.EmployeeName = empName
-				data.RecentLogs = append(data.RecentLogs, l)
-			}
+		for _, row := range tlRows {
+			data.RecentLogs = append(data.RecentLogs, pages.ToolLogRow{
+				ID:           row.ID,
+				EmployeeID:   row.EmployeeID,
+				EmployeeName: empName,
+				Tool:         row.Tool,
+				Action:       row.Action,
+				Success:      row.Success,
+				TraceID:      db.Deref(row.TraceID),
+				TaskID:       db.Deref(row.TaskID),
+				CreatedAt:    db.PgTime(row.CreatedAt),
+			})
 		}
 	}
 
@@ -165,55 +160,83 @@ func (h *AgentHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
 		// Employees for filter dropdown
-		empRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''), type, status, COALESCE(slack_user_id,''), created_at
-			 FROM employees ORDER BY type, role`)
+		empRows, err := h.q().ListAllEmployees(ctx)
 		if err == nil {
-			defer empRows.Close()
-			for empRows.Next() {
-				var e domain.Employee
-				if scanErr := empRows.Scan(
-					&e.ID, &e.CompanyID, &e.Name, &e.Role, &e.Specialties, &e.Type, &e.Status, &e.SlackUserID, &e.CreatedAt,
-				); scanErr == nil {
-					data.Employees = append(data.Employees, e)
+			for _, row := range empRows {
+				data.Employees = append(data.Employees, domain.Employee{
+					ID:          row.ID,
+					CompanyID:   row.CompanyID,
+					Name:        db.Deref(row.Name),
+					Role:        row.Role,
+					Specialties: db.Deref(row.Specialties),
+					Type:        row.Type,
+					Status:      row.Status,
+					SlackUserID: db.Deref(row.SlackUserID),
+					CreatedAt:   db.PgTime(row.CreatedAt),
+				})
+			}
+		}
+
+		// Fetch filtered tool logs using the appropriate dao query
+		type logRow struct {
+			ID           string
+			EmployeeID   string
+			EmployeeName string
+			Tool         string
+			Action       string
+			Success      bool
+			TraceID      string
+			TaskID       string
+			CreatedAt    time.Time
+		}
+		var logs []logRow
+
+		switch {
+		case data.FilterEmployee != "" && data.FilterTool != "":
+			rows, qErr := h.q().ListToolLogsWithEmployeeByEmployeeAndTool(ctx, dao.ListToolLogsWithEmployeeByEmployeeAndToolParams{
+				EmployeeID: data.FilterEmployee,
+				Tool:       "%" + data.FilterTool + "%",
+			})
+			if qErr == nil {
+				for _, r := range rows {
+					logs = append(logs, logRow{r.ID, r.EmployeeID, r.EmployeeName, r.Tool, r.Action, r.Success, r.TraceID, r.TaskID, db.PgTime(r.CreatedAt)})
+				}
+			}
+		case data.FilterEmployee != "":
+			rows, qErr := h.q().ListToolLogsWithEmployeeByEmployee(ctx, data.FilterEmployee)
+			if qErr == nil {
+				for _, r := range rows {
+					logs = append(logs, logRow{r.ID, r.EmployeeID, r.EmployeeName, r.Tool, r.Action, r.Success, r.TraceID, r.TaskID, db.PgTime(r.CreatedAt)})
+				}
+			}
+		case data.FilterTool != "":
+			rows, qErr := h.q().ListToolLogsWithEmployeeByTool(ctx, "%"+data.FilterTool+"%")
+			if qErr == nil {
+				for _, r := range rows {
+					logs = append(logs, logRow{r.ID, r.EmployeeID, r.EmployeeName, r.Tool, r.Action, r.Success, r.TraceID, r.TaskID, db.PgTime(r.CreatedAt)})
+				}
+			}
+		default:
+			rows, qErr := h.q().ListToolLogsWithEmployeeAll(ctx)
+			if qErr == nil {
+				for _, r := range rows {
+					logs = append(logs, logRow{r.ID, r.EmployeeID, r.EmployeeName, r.Tool, r.Action, r.Success, r.TraceID, r.TaskID, db.PgTime(r.CreatedAt)})
 				}
 			}
 		}
 
-		// Build filtered query
-		query := `
-			SELECT tl.id, tl.employee_id, COALESCE(e.name, e.role, tl.employee_id),
-			       tl.tool, tl.action, tl.success, COALESCE(tl.trace_id,''), COALESCE(tl.task_id,''), tl.created_at
-			FROM tool_logs tl
-			LEFT JOIN employees e ON e.id = tl.employee_id
-			WHERE 1=1`
-		args := []any{}
-		argIdx := 1
-		if data.FilterEmployee != "" {
-			query += fmt.Sprintf(" AND tl.employee_id = $%d", argIdx)
-			args = append(args, data.FilterEmployee)
-			argIdx++
-		}
-		if data.FilterTool != "" {
-			query += fmt.Sprintf(" AND tl.tool ILIKE $%d", argIdx)
-			args = append(args, "%"+data.FilterTool+"%")
-			argIdx++
-		}
-		_ = argIdx
-		query += " ORDER BY tl.created_at DESC LIMIT 200"
-
-		logRows, err := h.DB.Pool.Query(ctx, query, args...)
-		if err == nil {
-			defer logRows.Close()
-			for logRows.Next() {
-				var l pages.ToolLogRow
-				if scanErr := logRows.Scan(
-					&l.ID, &l.EmployeeID, &l.EmployeeName,
-					&l.Tool, &l.Action, &l.Success, &l.TraceID, &l.TaskID, &l.CreatedAt,
-				); scanErr == nil {
-					data.Logs = append(data.Logs, l)
-				}
-			}
+		for _, l := range logs {
+			data.Logs = append(data.Logs, pages.ToolLogRow{
+				ID:           l.ID,
+				EmployeeID:   l.EmployeeID,
+				EmployeeName: l.EmployeeName,
+				Tool:         l.Tool,
+				Action:       l.Action,
+				Success:      l.Success,
+				TraceID:      l.TraceID,
+				TaskID:       l.TaskID,
+				CreatedAt:    l.CreatedAt,
+			})
 		}
 	}
 

@@ -14,7 +14,7 @@ import (
 	"github.com/17twenty/rally/templates/layout"
 )
 
-templ CompanyShow(company domain.Company, employees []domain.Employee, flashMsg string, policyDoc string, financials *domain.CompanyFinancials) {
+templ CompanyShow(company domain.Company, employees []domain.Employee, flashMsg string, policyDoc string, financials *domain.CompanyFinancials, proposedHires []ProposedHireRow) {
 	@layout.Page(company.Name) {
 		<script>
 			function companyPoller() {
@@ -84,6 +84,66 @@ templ CompanyShow(company domain.Company, employees []domain.Employee, flashMsg 
 					</div>
 				</div>
 			</div>
+			<!-- Proposed Hires -->
+			if len(proposedHires) > 0 {
+				@card.Card() {
+					@card.Header() {
+						@card.Title() {
+							Proposed Hires
+						}
+						@card.Description() {
+							Team members proposed by your AEs — approve or reject
+						}
+					}
+					@card.Content() {
+						<div class="divide-y">
+							for _, ph := range proposedHires {
+								<div class="py-3 flex items-center justify-between">
+									<div class="space-y-1">
+										<div class="flex items-center gap-2">
+											<span class="font-medium text-sm">{ ph.Role }</span>
+											if ph.Department != "" {
+												<span class="text-xs text-muted-foreground">{ ph.Department }</span>
+											}
+											if ph.Status == "pending" {
+												@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+													pending
+												}
+											} else if ph.Status == "approved" {
+												@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+													approved
+												}
+											} else {
+												@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+													{ ph.Status }
+												}
+											}
+										</div>
+										if ph.Rationale != "" {
+											<p class="text-xs text-muted-foreground">{ ph.Rationale }</p>
+										}
+										<p class="text-xs text-muted-foreground">Proposed by { ph.ProposerName } · { ph.CreatedAt.Format("Jan 2 15:04") }</p>
+									</div>
+									if ph.Status == "pending" {
+										<div class="flex gap-2">
+											<form method="POST" action={ templ.SafeURL("/companies/" + company.ID + "/hires/" + ph.ID + "/approve") }>
+												@button.Button(button.Props{Size: button.SizeSm, Type: button.TypeSubmit}) {
+													Approve
+												}
+											</form>
+											<form method="POST" action={ templ.SafeURL("/companies/" + company.ID + "/hires/" + ph.ID + "/reject") }>
+												@button.Button(button.Props{Size: button.SizeSm, Variant: button.VariantOutline, Type: button.TypeSubmit}) {
+													Reject
+												}
+											</form>
+										</div>
+									}
+								</div>
+							}
+						</div>
+					}
+				}
+			}
 			<!-- Org chart -->
 			@card.Card() {
 				@card.Header() {

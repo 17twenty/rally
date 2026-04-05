@@ -148,7 +148,7 @@ func Setup() templ.Component {
 						}()
 					}
 					ctx = templ.InitializeContext(ctx)
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<form method=\"POST\" action=\"/setup\" class=\"space-y-6\"><!-- Step indicator --><div class=\"flex items-center gap-2 text-sm text-muted-foreground\"><span class=\"flex items-center gap-1\" :class=\"step >= 1 ? 'text-foreground font-medium' : ''\"><span class=\"flex h-5 w-5 items-center justify-center rounded-full text-xs\" :class=\"step >= 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'\">1</span> Company</span> <span class=\"flex-1 border-t\"></span> <span class=\"flex items-center gap-1\" :class=\"step >= 2 ? 'text-foreground font-medium' : ''\"><span class=\"flex h-5 w-5 items-center justify-center rounded-full text-xs\" :class=\"step >= 2 ? 'bg-primary text-primary-foreground' : 'bg-muted'\">2</span> Repository</span> <span class=\"flex-1 border-t\"></span> <span class=\"flex items-center gap-1\" :class=\"step >= 3 ? 'text-foreground font-medium' : ''\"><span class=\"flex h-5 w-5 items-center justify-center rounded-full text-xs\" :class=\"step >= 3 ? 'bg-primary text-primary-foreground' : 'bg-muted'\">3</span> Review</span></div><!-- Step 1: Company details --><div x-show=\"step === 1\" class=\"space-y-4\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<form method=\"POST\" action=\"/setup\" class=\"space-y-6\"><!-- Step indicator --><div class=\"flex items-center gap-2 text-sm text-muted-foreground\"><span class=\"flex items-center gap-1\" :class=\"step >= 1 ? 'text-foreground font-medium' : ''\"><span class=\"flex h-5 w-5 items-center justify-center rounded-full text-xs\" :class=\"step >= 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'\">1</span> Company</span> <span class=\"flex-1 border-t\"></span> <span class=\"flex items-center gap-1\" :class=\"step >= 2 ? 'text-foreground font-medium' : ''\"><span class=\"flex h-5 w-5 items-center justify-center rounded-full text-xs\" :class=\"step >= 2 ? 'bg-primary text-primary-foreground' : 'bg-muted'\">2</span> Repository</span> <span class=\"flex-1 border-t\"></span> <span class=\"flex items-center gap-1\" :class=\"step >= 3 ? 'text-foreground font-medium' : ''\"><span class=\"flex h-5 w-5 items-center justify-center rounded-full text-xs\" :class=\"step >= 3 ? 'bg-primary text-primary-foreground' : 'bg-muted'\">3</span> Policy</span> <span class=\"flex-1 border-t\"></span> <span class=\"flex items-center gap-1\" :class=\"step >= 4 ? 'text-foreground font-medium' : ''\"><span class=\"flex h-5 w-5 items-center justify-center rounded-full text-xs\" :class=\"step >= 4 ? 'bg-primary text-primary-foreground' : 'bg-muted'\">4</span> Review</span></div><!-- Step 1: Company details --><div x-show=\"step === 1\" class=\"space-y-4\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -651,7 +651,7 @@ func Setup() templ.Component {
 							}()
 						}
 						ctx = templ.InitializeContext(ctx)
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "Next: Review →")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "Next: Policy →")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -666,7 +666,7 @@ func Setup() templ.Component {
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "</div></div><!-- Step 3: Review and confirm --><div x-show=\"step === 3\" class=\"space-y-4\"><div class=\"rounded-md border p-4 space-y-3\"><p class=\"font-medium text-sm\">What will happen:</p><ul class=\"text-sm text-muted-foreground space-y-2 list-disc list-inside\"><li>Create the Rally company in the database</li><li>Hire 7 AI Employees: CEO-AE, CTO-AE, Product Manager-AE, Engineer-AE, Developer-AE, SDR-AE, CMO-AE, Designer-AE</li><li>AEs begin reviewing the codebase and PRD</li><li>Connect GitHub repo for Developer-AE (if token provided)</li><li>Add Rally codebase to the knowledge base</li></ul><div class=\"mt-4 p-3 rounded-md bg-muted/50 text-sm\"><p class=\"font-medium\">Slack Integration</p><p class=\"text-muted-foreground mt-1\">After setup, connect your Slack workspace so AEs can communicate with your team. Visit <a href=\"/slack/install\" class=\"text-primary underline\">/slack/install</a> to add Rally to Slack.</p></div></div><div class=\"flex justify-between\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "</div></div><!-- Step 3: Company Policy --><div x-show=\"step === 3\" class=\"space-y-4\"><p class=\"text-sm text-muted-foreground\">Define guidelines for how your AEs should work. This shapes their behaviour and decision-making.</p>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -682,23 +682,78 @@ func Setup() templ.Component {
 							}()
 						}
 						ctx = templ.InitializeContext(ctx)
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "← Back")
+						templ_7745c5c3_Var28 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+							templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+							templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+							if !templ_7745c5c3_IsBuffer {
+								defer func() {
+									templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+									if templ_7745c5c3_Err == nil {
+										templ_7745c5c3_Err = templ_7745c5c3_BufErr
+									}
+								}()
+							}
+							ctx = templ.InitializeContext(ctx)
+							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "Company Policy")
+							if templ_7745c5c3_Err != nil {
+								return templ_7745c5c3_Err
+							}
+							return nil
+						})
+						templ_7745c5c3_Err = form.Label(form.LabelProps{For: "policy"}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var28), templ_7745c5c3_Buffer)
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, " ")
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+						templ_7745c5c3_Err = textarea.Textarea(textarea.Props{
+							ID:    "policy",
+							Name:  "policy",
+							Rows:  8,
+							Value: "## Communication\n- Be concise and professional\n- Always explain your reasoning\n- Escalate to humans when unsure\n\n## Decision Making\n- Start lean — propose minimal viable solutions\n- Get approval before making irreversible changes\n- Document key decisions in the workspace\n\n## Collaboration\n- Check what others are working on before starting\n- Delegate tasks that match another team member's expertise\n- Share progress updates regularly",
+						}).Render(ctx, templ_7745c5c3_Buffer)
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, " ")
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+						templ_7745c5c3_Var29 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+							templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+							templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+							if !templ_7745c5c3_IsBuffer {
+								defer func() {
+									templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+									if templ_7745c5c3_Err == nil {
+										templ_7745c5c3_Err = templ_7745c5c3_BufErr
+									}
+								}()
+							}
+							ctx = templ.InitializeContext(ctx)
+							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "Markdown format. Your AE CEO will see this on their first cycle and follow these guidelines.")
+							if templ_7745c5c3_Err != nil {
+								return templ_7745c5c3_Err
+							}
+							return nil
+						})
+						templ_7745c5c3_Err = form.Description().Render(templ.WithChildren(ctx, templ_7745c5c3_Var29), templ_7745c5c3_Buffer)
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 						return nil
 					})
-					templ_7745c5c3_Err = button.Button(button.Props{
-						Variant: button.VariantGhost,
-						Type:    button.TypeButton,
-						Attributes: templ.Attributes{
-							"@click": "step = 2",
-						},
-					}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var27), templ_7745c5c3_Buffer)
+					templ_7745c5c3_Err = form.Item().Render(templ.WithChildren(ctx, templ_7745c5c3_Var27), templ_7745c5c3_Buffer)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Var28 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "<div class=\"flex justify-between\">")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Var30 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 						templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 						templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
 						if !templ_7745c5c3_IsBuffer {
@@ -710,7 +765,94 @@ func Setup() templ.Component {
 							}()
 						}
 						ctx = templ.InitializeContext(ctx)
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "Build the team")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "← Back")
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+						return nil
+					})
+					templ_7745c5c3_Err = button.Button(button.Props{
+						Variant: button.VariantGhost,
+						Type:    button.TypeButton,
+						Attributes: templ.Attributes{
+							"@click": "step = 2",
+						},
+					}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var30), templ_7745c5c3_Buffer)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Var31 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+						templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+						templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+						if !templ_7745c5c3_IsBuffer {
+							defer func() {
+								templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+								if templ_7745c5c3_Err == nil {
+									templ_7745c5c3_Err = templ_7745c5c3_BufErr
+								}
+							}()
+						}
+						ctx = templ.InitializeContext(ctx)
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "Next: Review →")
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+						return nil
+					})
+					templ_7745c5c3_Err = button.Button(button.Props{
+						Type: button.TypeButton,
+						Attributes: templ.Attributes{
+							"@click": "step = 4",
+						},
+					}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var31), templ_7745c5c3_Buffer)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "</div></div><!-- Step 4: Review and confirm --><div x-show=\"step === 4\" class=\"space-y-4\"><div class=\"rounded-md border p-4 space-y-3\"><p class=\"font-medium text-sm\">What will happen:</p><ul class=\"text-sm text-muted-foreground space-y-2 list-disc list-inside\"><li>Create your company in the database</li><li>Set your company policy (AEs will follow these guidelines)</li><li>Hire a CEO — your founding AI executive</li><li>The CEO will review the mission and propose team hires</li><li>You approve hires from the company page</li></ul><div class=\"mt-4 p-3 rounded-md bg-muted/50 text-sm\"><p class=\"font-medium\">After setup</p><p class=\"text-muted-foreground mt-1\">Visit <a href=\"/slack/install\" class=\"text-primary underline\">Settings</a> to connect Slack, Google Workspace, and other integrations.</p></div></div><div class=\"flex justify-between\">")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Var32 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+						templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+						templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+						if !templ_7745c5c3_IsBuffer {
+							defer func() {
+								templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+								if templ_7745c5c3_Err == nil {
+									templ_7745c5c3_Err = templ_7745c5c3_BufErr
+								}
+							}()
+						}
+						ctx = templ.InitializeContext(ctx)
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "← Back")
+						if templ_7745c5c3_Err != nil {
+							return templ_7745c5c3_Err
+						}
+						return nil
+					})
+					templ_7745c5c3_Err = button.Button(button.Props{
+						Variant: button.VariantGhost,
+						Type:    button.TypeButton,
+						Attributes: templ.Attributes{
+							"@click": "step = 3",
+						},
+					}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var32), templ_7745c5c3_Buffer)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Var33 := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+						templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+						templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+						if !templ_7745c5c3_IsBuffer {
+							defer func() {
+								templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+								if templ_7745c5c3_Err == nil {
+									templ_7745c5c3_Err = templ_7745c5c3_BufErr
+								}
+							}()
+						}
+						ctx = templ.InitializeContext(ctx)
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "Hire your CEO")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -719,11 +861,11 @@ func Setup() templ.Component {
 					templ_7745c5c3_Err = button.Button(button.Props{
 						Type: button.TypeSubmit,
 						Size: button.SizeLg,
-					}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var28), templ_7745c5c3_Buffer)
+					}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var33), templ_7745c5c3_Buffer)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "</div></div></form>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</div></div></form>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -739,7 +881,7 @@ func Setup() templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

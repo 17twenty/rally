@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/17twenty/rally/internal/domain"
@@ -40,18 +39,15 @@ type OrgPlan struct {
 	Hierarchy []ReportingLine
 }
 
-// DesignOrg produces a standard v1 org plan for the given company and existing humans.
+// DesignOrg creates a minimal org plan — just a CEO AE who reports to the
+// human founder. The CEO then uses ProposeHire to build out the team based
+// on the company's needs. No hardcoded roles beyond CEO.
 func (m *OrgManager) DesignOrg(company domain.Company, humans []domain.Employee) (*OrgPlan, error) {
-	// Determine if there's a human CEO or CTO.
-	var humanCEOID, humanCTOID string
+	// Find the human founder/CEO to set as reports-to.
+	var founderID string
 	for _, h := range humans {
-		role := strings.ToLower(h.Role)
-		switch {
-		case strings.Contains(role, "ceo") || strings.Contains(role, "chief executive"):
-			humanCEOID = h.ID
-		case strings.Contains(role, "cto") || strings.Contains(role, "chief technology"):
-			humanCTOID = h.ID
-		}
+		founderID = h.ID // use the first human as the reporting line
+		break
 	}
 
 	roles := []PlannedRole{
@@ -59,81 +55,13 @@ func (m *OrgManager) DesignOrg(company domain.Company, humans []domain.Employee)
 			ID:         "ceo-ae",
 			Role:       "CEO",
 			Department: "Executive",
-			ReportsTo:  humanCEOID, // empty if no human CEO
-			Rationale:  "Top-level AI executive responsible for company strategy and direction.",
+			ReportsTo:  founderID,
+			Rationale:  "Founding AI executive. Reviews company mission and proposes the team structure.",
 		},
 	}
 
-	// Add CTO-AE only if there's no human CTO.
-	if humanCTOID == "" {
-		roles = append(roles, PlannedRole{
-			ID:         "cto-ae",
-			Role:       "CTO",
-			Department: "Engineering",
-			ReportsTo:  "ceo-ae",
-			Rationale:  "AI technology leader responsible for engineering strategy.",
-		})
-	}
-
-	ctoReportsTo := func() string {
-		if humanCTOID != "" {
-			return humanCTOID
-		}
-		return "cto-ae"
-	}()
-
-	roles = append(roles,
-		PlannedRole{
-			ID:         "product-ae",
-			Role:       "Product Manager",
-			Department: "Product",
-			ReportsTo:  "ceo-ae",
-			Rationale:  "AI product manager responsible for roadmap and prioritization.",
-		},
-		PlannedRole{
-			ID:         "engineer-ae",
-			Role:       "Software Engineer",
-			Department: "Engineering",
-			ReportsTo:  ctoReportsTo,
-			Rationale:  "AI engineer responsible for implementation and delivery.",
-		},
-		PlannedRole{
-			ID:         "developer-ae",
-			Role:       "Developer",
-			Department: "Engineering",
-			ReportsTo:  ctoReportsTo,
-			Rationale:  "AI developer responsible for writing, testing, and shipping code.",
-		},
-		PlannedRole{
-			ID:         "sdr-ae",
-			Role:       "SDR",
-			Department: "Sales",
-			ReportsTo:  "ceo-ae",
-			Rationale:  "AI sales development representative for lead discovery and outbound outreach.",
-		},
-		PlannedRole{
-			ID:         "cmo-ae",
-			Role:       "CMO",
-			Department: "Marketing",
-			ReportsTo:  "ceo-ae",
-			Rationale:  "AI Chief Marketing Officer responsible for brand, campaigns, and growth.",
-		},
-		PlannedRole{
-			ID:         "designer-ae",
-			Role:       "Designer",
-			Department: "Design",
-			ReportsTo:  "ceo-ae",
-			Rationale:  "AI designer responsible for UI/UX design, visual assets, and brand consistency.",
-		},
-	)
-
-	// Build hierarchy from roles.
-	hierarchy := make([]ReportingLine, 0, len(roles))
-	for _, r := range roles {
-		hierarchy = append(hierarchy, ReportingLine{
-			EmployeeID: r.ID,
-			ReportsTo:  r.ReportsTo,
-		})
+	hierarchy := []ReportingLine{
+		{EmployeeID: "ceo-ae", ReportsTo: founderID},
 	}
 
 	return &OrgPlan{

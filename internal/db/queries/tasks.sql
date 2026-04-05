@@ -17,6 +17,20 @@ WHERE assignee_id = $1 AND status NOT IN ('done', 'cancelled')
 ORDER BY created_at DESC
 LIMIT 10;
 
+-- name: UpdateTaskStatusByAssignee :exec
+UPDATE tasks SET status = $2 WHERE id = $1 AND assignee_id = $3;
+
+-- name: GetTaskDetail :one
+SELECT t.id, t.company_id, t.title, COALESCE(t.description,'') as description,
+       COALESCE(t.assignee_id,'') as assignee_id, t.status,
+       COALESCE(t.slack_thread_ts,'') as slack_thread_ts, COALESCE(t.slack_channel,'') as slack_channel, t.created_at,
+       COALESCE(e.name, e.role, '') as assignee_name,
+       COALESCE(c.name, '') as company_name
+FROM tasks t
+LEFT JOIN employees e ON e.id = t.assignee_id
+LEFT JOIN companies c ON c.id = t.company_id
+WHERE t.id = $1;
+
 -- name: ListActiveTasks :many
 SELECT t.id, t.company_id, t.title, COALESCE(t.description,'') as description, COALESCE(t.assignee_id,'') as assignee_id, t.status, t.created_at,
        COALESCE(e.name, e.role, '') as assignee_name,

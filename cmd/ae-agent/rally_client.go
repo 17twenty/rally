@@ -83,12 +83,36 @@ func (c *RallyClient) Heartbeat(ctx context.Context, cycle int) error {
 
 // Observations represents what the AE should observe this cycle.
 type Observations struct {
-	SlackEvents []SlackEventObs `json:"slack_events"`
-	Memories    []MemoryObs     `json:"memories"`
-	Tasks       []TaskObs       `json:"tasks"`
-	WorkItems   []WorkItemObs   `json:"work_items"`
-	Messages    []AEMessageObs  `json:"messages"`
-	PolicyDoc   string          `json:"policy_doc"`
+	Company       CompanyObs        `json:"company"`
+	Team          []TeamMemberObs   `json:"team"`
+	SlackEvents   []SlackEventObs   `json:"slack_events"`
+	Memories      []MemoryObs       `json:"memories"`
+	Tasks         []TaskObs         `json:"tasks"`
+	WorkItems     []WorkItemObs     `json:"work_items"`
+	Messages      []AEMessageObs    `json:"messages"`
+	ProposedHires []ProposedHireObs `json:"proposed_hires"`
+	PolicyDoc     string            `json:"policy_doc"`
+}
+
+// CompanyObs is company info returned by the observations endpoint.
+type CompanyObs struct {
+	Name    string `json:"name"`
+	Mission string `json:"mission"`
+}
+
+// TeamMemberObs is a team member returned by the observations endpoint.
+type TeamMemberObs struct {
+	Name   string `json:"name"`
+	Role   string `json:"role"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
+}
+
+// ProposedHireObs is a pending hire proposal visible in observations.
+type ProposedHireObs struct {
+	Role      string `json:"role"`
+	Status    string `json:"status"`
+	Rationale string `json:"rationale"`
 }
 
 // WorkItemObs is a backlog work item returned by the observations endpoint.
@@ -359,6 +383,18 @@ func (c *RallyClient) UpdateTaskStatus(ctx context.Context, taskID, status, note
 	return c.do(ctx, "PATCH", "/api/ae/tasks/"+taskID, map[string]string{
 		"status": status, "note": note,
 	})
+}
+
+// ProposeHire proposes a new team member to be hired.
+func (c *RallyClient) ProposeHire(ctx context.Context, role, department, rationale, reportsTo string) ([]byte, error) {
+	return c.do(ctx, "POST", "/api/ae/propose-hire", map[string]string{
+		"role": role, "department": department, "rationale": rationale, "reports_to": reportsTo,
+	})
+}
+
+// ListTeam returns all team members for this AE's company.
+func (c *RallyClient) ListTeam(ctx context.Context) ([]byte, error) {
+	return c.do(ctx, "GET", "/api/ae/team", nil)
 }
 
 // FetchCredential retrieves a decrypted credential from Rally's vault.

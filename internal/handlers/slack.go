@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/queue"
 )
+
+func (h *SlackHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
 
 // SlackHandler handles inbound Slack webhook events.
 type SlackHandler struct {
@@ -148,9 +151,9 @@ func (h *SlackHandler) Events(w http.ResponseWriter, r *http.Request) {
 	if h.DB != nil {
 		// Resolve company_id: single-tenant fallback to first active company.
 		var companyID string
-		_ = h.DB.Pool.QueryRow(r.Context(),
-			`SELECT id FROM companies WHERE status IN ('active','pending') ORDER BY created_at LIMIT 1`,
-		).Scan(&companyID)
+		if companies, listErr := h.q().ListCompanies(r.Context()); listErr == nil && len(companies) > 0 {
+			companyID = companies[len(companies)-1].ID // oldest (ListCompanies is DESC)
+		}
 
 		if err := h.insertSlackEvent(r, evt.Type, channel, userID, threadTS, ts, companyID, payloadMap); err != nil {
 			log.Printf("slack: insert event: %v", err)
@@ -187,12 +190,16 @@ func (h *SlackHandler) insertSlackEvent(r *http.Request, eventType, channel, use
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
-	id := newID()
-	_, err = h.DB.Pool.Exec(r.Context(),
-		`INSERT INTO slack_events (id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		id, companyID, eventType, channel, userID, threadTS, messageTS, payloadJSON,
-	)
+	_, err = h.q().InsertSlackEvent(r.Context(), dao.InsertSlackEventParams{
+		ID:        newID(),
+		CompanyID: companyID,
+		EventType: eventType,
+		Channel:   db.Ref(channel),
+		UserID:    db.Ref(userID),
+		ThreadTs:  db.Ref(threadTS),
+		MessageTs: db.Ref(messageTS),
+		Payload:   payloadJSON,
+	})
 	return err
 }
 

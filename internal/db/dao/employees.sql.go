@@ -7,9 +7,18 @@ package dao
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countAEs = `-- name: CountAEs :one
+SELECT COUNT(*) FROM employees WHERE type = 'ae'
+`
+
+func (q *Queries) CountAEs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countAEs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
 
 const getEmployee = `-- name: GetEmployee :one
 SELECT id, company_id, role, type, status, slack_user_id, created_at, name, specialties, container_id, container_status FROM employees WHERE id = $1
@@ -34,22 +43,49 @@ func (q *Queries) GetEmployee(ctx context.Context, id string) (Employee, error) 
 	return i, err
 }
 
+const getEmployeeByRole = `-- name: GetEmployeeByRole :one
+SELECT id, company_id, role, type, status, slack_user_id, created_at, name, specialties, container_id, container_status FROM employees WHERE company_id = $1 AND role = $2 AND type = 'ae' LIMIT 1
+`
+
+type GetEmployeeByRoleParams struct {
+	CompanyID string `json:"company_id"`
+	Role      string `json:"role"`
+}
+
+func (q *Queries) GetEmployeeByRole(ctx context.Context, arg GetEmployeeByRoleParams) (Employee, error) {
+	row := q.db.QueryRow(ctx, getEmployeeByRole, arg.CompanyID, arg.Role)
+	var i Employee
+	err := row.Scan(
+		&i.ID,
+		&i.CompanyID,
+		&i.Role,
+		&i.Type,
+		&i.Status,
+		&i.SlackUserID,
+		&i.CreatedAt,
+		&i.Name,
+		&i.Specialties,
+		&i.ContainerID,
+		&i.ContainerStatus,
+	)
+	return i, err
+}
+
 const insertEmployee = `-- name: InsertEmployee :one
-INSERT INTO employees (id, company_id, role, type, status, slack_user_id, name, specialties, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO employees (id, company_id, role, type, status, slack_user_id, name, specialties)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id, company_id, role, type, status, slack_user_id, created_at, name, specialties, container_id, container_status
 `
 
 type InsertEmployeeParams struct {
-	ID          string             `json:"id"`
-	CompanyID   string             `json:"company_id"`
-	Role        string             `json:"role"`
-	Type        string             `json:"type"`
-	Status      string             `json:"status"`
-	SlackUserID *string            `json:"slack_user_id"`
-	Name        *string            `json:"name"`
-	Specialties *string            `json:"specialties"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ID          string  `json:"id"`
+	CompanyID   string  `json:"company_id"`
+	Role        string  `json:"role"`
+	Type        string  `json:"type"`
+	Status      string  `json:"status"`
+	SlackUserID *string `json:"slack_user_id"`
+	Name        *string `json:"name"`
+	Specialties *string `json:"specialties"`
 }
 
 func (q *Queries) InsertEmployee(ctx context.Context, arg InsertEmployeeParams) (Employee, error) {
@@ -62,7 +98,6 @@ func (q *Queries) InsertEmployee(ctx context.Context, arg InsertEmployeeParams) 
 		arg.SlackUserID,
 		arg.Name,
 		arg.Specialties,
-		arg.CreatedAt,
 	)
 	var i Employee
 	err := row.Scan(
@@ -79,6 +114,114 @@ func (q *Queries) InsertEmployee(ctx context.Context, arg InsertEmployeeParams) 
 		&i.ContainerStatus,
 	)
 	return i, err
+}
+
+const listAEsByCompany = `-- name: ListAEsByCompany :many
+SELECT id, company_id, role, type, status, slack_user_id, created_at, name, specialties, container_id, container_status FROM employees WHERE company_id = $1 AND type = 'ae' ORDER BY created_at
+`
+
+func (q *Queries) ListAEsByCompany(ctx context.Context, companyID string) ([]Employee, error) {
+	rows, err := q.db.Query(ctx, listAEsByCompany, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Employee{}
+	for rows.Next() {
+		var i Employee
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyID,
+			&i.Role,
+			&i.Type,
+			&i.Status,
+			&i.SlackUserID,
+			&i.CreatedAt,
+			&i.Name,
+			&i.Specialties,
+			&i.ContainerID,
+			&i.ContainerStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllEmployees = `-- name: ListAllEmployees :many
+SELECT id, company_id, role, type, status, slack_user_id, created_at, name, specialties, container_id, container_status FROM employees ORDER BY type, role
+`
+
+func (q *Queries) ListAllEmployees(ctx context.Context) ([]Employee, error) {
+	rows, err := q.db.Query(ctx, listAllEmployees)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Employee{}
+	for rows.Next() {
+		var i Employee
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyID,
+			&i.Role,
+			&i.Type,
+			&i.Status,
+			&i.SlackUserID,
+			&i.CreatedAt,
+			&i.Name,
+			&i.Specialties,
+			&i.ContainerID,
+			&i.ContainerStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllEmployeesByCreatedAt = `-- name: ListAllEmployeesByCreatedAt :many
+SELECT id, company_id, role, type, status, slack_user_id, created_at, name, specialties, container_id, container_status FROM employees ORDER BY created_at ASC
+`
+
+func (q *Queries) ListAllEmployeesByCreatedAt(ctx context.Context) ([]Employee, error) {
+	rows, err := q.db.Query(ctx, listAllEmployeesByCreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Employee{}
+	for rows.Next() {
+		var i Employee
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyID,
+			&i.Role,
+			&i.Type,
+			&i.Status,
+			&i.SlackUserID,
+			&i.CreatedAt,
+			&i.Name,
+			&i.Specialties,
+			&i.ContainerID,
+			&i.ContainerStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listEmployeesByCompany = `-- name: ListEmployeesByCompany :many
@@ -151,6 +294,20 @@ func (q *Queries) ListHumanEmployeesByCompany(ctx context.Context, companyID str
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateEmployeeContainerStatus = `-- name: UpdateEmployeeContainerStatus :exec
+UPDATE employees SET container_status = $2 WHERE id = $1
+`
+
+type UpdateEmployeeContainerStatusParams struct {
+	ID              string  `json:"id"`
+	ContainerStatus *string `json:"container_status"`
+}
+
+func (q *Queries) UpdateEmployeeContainerStatus(ctx context.Context, arg UpdateEmployeeContainerStatusParams) error {
+	_, err := q.db.Exec(ctx, updateEmployeeContainerStatus, arg.ID, arg.ContainerStatus)
+	return err
 }
 
 const updateEmployeeStatus = `-- name: UpdateEmployeeStatus :exec

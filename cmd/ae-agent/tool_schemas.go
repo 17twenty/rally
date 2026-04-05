@@ -273,6 +273,29 @@ func localToolDefs() []ToolDefinition {
 				"required": []string{"task_id", "status"},
 			},
 		},
+		// --- Hiring ---
+		{
+			Name:        "ProposeHire",
+			Description: "Propose a new team member to be hired. The proposal will be reviewed by human leadership. Include a clear rationale for why this role is needed.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"role":       map[string]any{"type": "string", "description": "Job title (e.g., CTO, Head of Sales, Designer)"},
+					"department": map[string]any{"type": "string", "description": "Department (e.g., Engineering, Sales, Marketing)"},
+					"rationale":  map[string]any{"type": "string", "description": "Why this hire is needed — what gap does it fill?"},
+					"reports_to": map[string]any{"type": "string", "description": "Role this person reports to (e.g., CEO, CTO)"},
+				},
+				"required": []string{"role", "rationale"},
+			},
+		},
+		{
+			Name:        "ListTeam",
+			Description: "List all current team members with their roles, types, and status. Use this to understand the current org before proposing hires.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
 		// --- Browser ---
 		{
 			Name:        "BrowserNavigate",

@@ -25,6 +25,9 @@ LIMIT 30;
 -- name: UpdateWorkItemStatus :exec
 UPDATE work_items SET status = $2, updated_at = now() WHERE id = $1 AND owner_id = $3;
 
+-- name: TouchWorkItem :exec
+UPDATE work_items SET updated_at = now() WHERE id = $1;
+
 -- name: AddWorkItemHistory :exec
 INSERT INTO work_item_history (id, work_item_id, change_type, content, metadata)
 VALUES ($1, $2, $3, $4, $5);

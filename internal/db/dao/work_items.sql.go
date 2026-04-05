@@ -216,6 +216,15 @@ func (q *Queries) ListWorkItemsByOwner(ctx context.Context, ownerID string) ([]L
 	return items, nil
 }
 
+const touchWorkItem = `-- name: TouchWorkItem :exec
+UPDATE work_items SET updated_at = now() WHERE id = $1
+`
+
+func (q *Queries) TouchWorkItem(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, touchWorkItem, id)
+	return err
+}
+
 const updateWorkItemStatus = `-- name: UpdateWorkItemStatus :exec
 UPDATE work_items SET status = $2, updated_at = now() WHERE id = $1 AND owner_id = $3
 `

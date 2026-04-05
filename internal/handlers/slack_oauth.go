@@ -11,9 +11,12 @@ import (
 	"strings"
 
 	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/slack"
 	"github.com/17twenty/rally/internal/vault"
 )
+
+func (h *SlackOAuthHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
 
 // OAuthScopes lists the required Slack OAuth scopes per SLACK_NOTES §3.2.
 var OAuthScopes = []string{
@@ -100,9 +103,9 @@ func (h *SlackOAuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 	if h.Vault != nil && h.DB != nil {
 		// Find the first company (setup flow creates one).
 		var companyID string
-		_ = h.DB.Pool.QueryRow(r.Context(),
-			`SELECT id FROM companies ORDER BY created_at ASC LIMIT 1`,
-		).Scan(&companyID)
+		if companies, listErr := h.q().ListCompanies(r.Context()); listErr == nil && len(companies) > 0 {
+			companyID = companies[len(companies)-1].ID // oldest first (ListCompanies is DESC, so last = oldest)
+		}
 
 		if companyID != "" {
 			storeErr := h.Vault.Store(r.Context(), companyID, "rally-system", "slack",
@@ -114,10 +117,11 @@ func (h *SlackOAuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 			}
 
 			// Also store team metadata.
-			_, _ = h.DB.Pool.Exec(r.Context(),
-				`UPDATE companies SET slack_team_id = $1, slack_team_name = $2 WHERE id = $3`,
-				token.Team.ID, token.Team.Name, companyID,
-			)
+			_ = h.q().UpdateSlackTeam(r.Context(), dao.UpdateSlackTeamParams{
+				ID:            companyID,
+				SlackTeamID:   db.Ref(token.Team.ID),
+				SlackTeamName: db.Ref(token.Team.Name),
+			})
 		}
 	}
 

@@ -7,9 +7,18 @@ package dao
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countCompanies = `-- name: CountCompanies :one
+SELECT COUNT(*) FROM companies
+`
+
+func (q *Queries) CountCompanies(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countCompanies)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
 
 const getCompany = `-- name: GetCompany :one
 SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name FROM companies WHERE id = $1
@@ -31,19 +40,28 @@ func (q *Queries) GetCompany(ctx context.Context, id string) (Company, error) {
 	return i, err
 }
 
+const getCompanyPolicy = `-- name: GetCompanyPolicy :one
+SELECT COALESCE(policy_doc, '') as policy_doc FROM companies WHERE id = $1
+`
+
+func (q *Queries) GetCompanyPolicy(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getCompanyPolicy, id)
+	var policy_doc string
+	err := row.Scan(&policy_doc)
+	return policy_doc, err
+}
+
 const insertCompany = `-- name: InsertCompany :one
-INSERT INTO companies (id, name, mission, status, created_at, policy_doc)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO companies (id, name, mission, status)
+VALUES ($1, $2, $3, $4)
 RETURNING id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name
 `
 
 type InsertCompanyParams struct {
-	ID        string             `json:"id"`
-	Name      string             `json:"name"`
-	Mission   *string            `json:"mission"`
-	Status    string             `json:"status"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	PolicyDoc *string            `json:"policy_doc"`
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Mission *string `json:"mission"`
+	Status  string  `json:"status"`
 }
 
 func (q *Queries) InsertCompany(ctx context.Context, arg InsertCompanyParams) (Company, error) {
@@ -52,8 +70,6 @@ func (q *Queries) InsertCompany(ctx context.Context, arg InsertCompanyParams) (C
 		arg.Name,
 		arg.Mission,
 		arg.Status,
-		arg.CreatedAt,
-		arg.PolicyDoc,
 	)
 	var i Company
 	err := row.Scan(
@@ -75,6 +91,39 @@ SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_t
 
 func (q *Queries) ListCompanies(ctx context.Context) ([]Company, error) {
 	rows, err := q.db.Query(ctx, listCompanies)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Company{}
+	for rows.Next() {
+		var i Company
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Mission,
+			&i.Status,
+			&i.CreatedAt,
+			&i.PolicyDoc,
+			&i.SlackTeamID,
+			&i.SlackTeamName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCompaniesByName = `-- name: ListCompaniesByName :many
+SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name FROM companies ORDER BY name
+`
+
+func (q *Queries) ListCompaniesByName(ctx context.Context) ([]Company, error) {
+	rows, err := q.db.Query(ctx, listCompaniesByName)
 	if err != nil {
 		return nil, err
 	}
@@ -127,5 +176,20 @@ type UpdateCompanyStatusParams struct {
 
 func (q *Queries) UpdateCompanyStatus(ctx context.Context, arg UpdateCompanyStatusParams) error {
 	_, err := q.db.Exec(ctx, updateCompanyStatus, arg.ID, arg.Status)
+	return err
+}
+
+const updateSlackTeam = `-- name: UpdateSlackTeam :exec
+UPDATE companies SET slack_team_id = $2, slack_team_name = $3 WHERE id = $1
+`
+
+type UpdateSlackTeamParams struct {
+	ID            string  `json:"id"`
+	SlackTeamID   *string `json:"slack_team_id"`
+	SlackTeamName *string `json:"slack_team_name"`
+}
+
+func (q *Queries) UpdateSlackTeam(ctx context.Context, arg UpdateSlackTeamParams) error {
+	_, err := q.db.Exec(ctx, updateSlackTeam, arg.ID, arg.SlackTeamID, arg.SlackTeamName)
 	return err
 }

@@ -88,6 +88,51 @@ func (q *Queries) GetTask(ctx context.Context, id string) (GetTaskRow, error) {
 	return i, err
 }
 
+const getTaskDetail = `-- name: GetTaskDetail :one
+SELECT t.id, t.company_id, t.title, COALESCE(t.description,'') as description,
+       COALESCE(t.assignee_id,'') as assignee_id, t.status,
+       COALESCE(t.slack_thread_ts,'') as slack_thread_ts, COALESCE(t.slack_channel,'') as slack_channel, t.created_at,
+       COALESCE(e.name, e.role, '') as assignee_name,
+       COALESCE(c.name, '') as company_name
+FROM tasks t
+LEFT JOIN employees e ON e.id = t.assignee_id
+LEFT JOIN companies c ON c.id = t.company_id
+WHERE t.id = $1
+`
+
+type GetTaskDetailRow struct {
+	ID            string             `json:"id"`
+	CompanyID     string             `json:"company_id"`
+	Title         string             `json:"title"`
+	Description   string             `json:"description"`
+	AssigneeID    string             `json:"assignee_id"`
+	Status        string             `json:"status"`
+	SlackThreadTs string             `json:"slack_thread_ts"`
+	SlackChannel  string             `json:"slack_channel"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	AssigneeName  string             `json:"assignee_name"`
+	CompanyName   string             `json:"company_name"`
+}
+
+func (q *Queries) GetTaskDetail(ctx context.Context, id string) (GetTaskDetailRow, error) {
+	row := q.db.QueryRow(ctx, getTaskDetail, id)
+	var i GetTaskDetailRow
+	err := row.Scan(
+		&i.ID,
+		&i.CompanyID,
+		&i.Title,
+		&i.Description,
+		&i.AssigneeID,
+		&i.Status,
+		&i.SlackThreadTs,
+		&i.SlackChannel,
+		&i.CreatedAt,
+		&i.AssigneeName,
+		&i.CompanyName,
+	)
+	return i, err
+}
+
 const listActiveTasks = `-- name: ListActiveTasks :many
 SELECT t.id, t.company_id, t.title, COALESCE(t.description,'') as description, COALESCE(t.assignee_id,'') as assignee_id, t.status, t.created_at,
        COALESCE(e.name, e.role, '') as assignee_name,
@@ -192,5 +237,20 @@ type UpdateTaskStatusParams struct {
 
 func (q *Queries) UpdateTaskStatus(ctx context.Context, arg UpdateTaskStatusParams) error {
 	_, err := q.db.Exec(ctx, updateTaskStatus, arg.ID, arg.Status)
+	return err
+}
+
+const updateTaskStatusByAssignee = `-- name: UpdateTaskStatusByAssignee :exec
+UPDATE tasks SET status = $2 WHERE id = $1 AND assignee_id = $3
+`
+
+type UpdateTaskStatusByAssigneeParams struct {
+	ID         string  `json:"id"`
+	Status     string  `json:"status"`
+	AssigneeID *string `json:"assignee_id"`
+}
+
+func (q *Queries) UpdateTaskStatusByAssignee(ctx context.Context, arg UpdateTaskStatusByAssigneeParams) error {
+	_, err := q.db.Exec(ctx, updateTaskStatusByAssignee, arg.ID, arg.Status, arg.AssigneeID)
 	return err
 }

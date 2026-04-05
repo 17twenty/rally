@@ -10,10 +10,9 @@ import (
 
 	"github.com/17twenty/rally/internal/container"
 	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/internal/llm"
-	"github.com/17twenty/rally/internal/org"
-	"github.com/17twenty/rally/internal/queue"
 	"github.com/17twenty/rally/internal/tools"
 	"github.com/17twenty/rally/templates/pages"
 	"github.com/a-h/templ"
@@ -27,6 +26,8 @@ type CompanyHandler struct {
 	InvoiceTool      *tools.InvoiceTool
 }
 
+func (h *CompanyHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
+
 // newID generates a random UUID v4 string.
 func newID() string {
 	var b [16]byte
@@ -39,22 +40,21 @@ func newID() string {
 
 // List handles GET /companies.
 func (h *CompanyHandler) List(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.Pool.Query(r.Context(),
-		`SELECT id, name, COALESCE(mission,''), status, created_at FROM companies ORDER BY created_at DESC`)
+	rows, err := h.q().ListCompanies(r.Context())
 	if err != nil {
 		http.Error(w, "failed to load companies", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
-	var companies []domain.Company
-	for rows.Next() {
-		var c domain.Company
-		if err := rows.Scan(&c.ID, &c.Name, &c.Mission, &c.Status, &c.CreatedAt); err != nil {
-			http.Error(w, "scan error", http.StatusInternalServerError)
-			return
+	companies := make([]domain.Company, len(rows))
+	for i, c := range rows {
+		companies[i] = domain.Company{
+			ID:        c.ID,
+			Name:      c.Name,
+			Mission:   db.Deref(c.Mission),
+			Status:    c.Status,
+			CreatedAt: db.PgTime(c.CreatedAt),
 		}
-		companies = append(companies, c)
 	}
 
 	templ.Handler(pages.CompaniesList(companies)).ServeHTTP(w, r)
@@ -82,10 +82,12 @@ func (h *CompanyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	companyID := newID()
 
-	_, err := h.DB.Pool.Exec(ctx,
-		`INSERT INTO companies (id, name, mission, status) VALUES ($1, $2, $3, 'pending')`,
-		companyID, name, mission,
-	)
+	_, err := h.q().InsertCompany(ctx, dao.InsertCompanyParams{
+		ID:      companyID,
+		Name:    name,
+		Mission: db.Ref(mission),
+		Status:  "pending",
+	})
 	if err != nil {
 		http.Error(w, "failed to create company", http.StatusInternalServerError)
 		return
@@ -109,50 +111,23 @@ func (h *CompanyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		empID := newID()
-		_, err := h.DB.Pool.Exec(ctx,
-			`INSERT INTO employees (id, company_id, name, role, specialties, type, status) VALUES ($1, $2, $3, $4, $5, 'human', 'active')`,
-			empID, companyID, empName, empRole, empSpec,
-		)
+		_, err := h.q().InsertEmployee(ctx, dao.InsertEmployeeParams{
+			ID:          empID,
+			CompanyID:   companyID,
+			Name:        db.Ref(empName),
+			Role:        empRole,
+			Specialties: db.Ref(empSpec),
+			Type:        "human",
+			Status:      "active",
+		})
 		if err != nil {
 			http.Error(w, "failed to add employee", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// Design org and enqueue hiring jobs for each planned AE role.
-	if queue.Client != nil {
-		humanRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, COALESCE(name,''), role FROM employees WHERE company_id = $1 AND type = 'human'`,
-			companyID,
-		)
-		if err == nil {
-			var humans []domain.Employee
-			for humanRows.Next() {
-				var e domain.Employee
-				if scanErr := humanRows.Scan(&e.ID, &e.Name, &e.Role); scanErr == nil {
-					e.Type = "human"
-					humans = append(humans, e)
-				}
-			}
-			humanRows.Close()
-
-			mgr := org.NewOrgManager()
-			company := domain.Company{ID: companyID, Name: name, Mission: mission}
-			if plan, designErr := mgr.DesignOrg(company, humans); designErr == nil {
-				for _, role := range plan.Roles {
-					_, _ = queue.Client.Insert(ctx, queue.HiringJobArgs{
-						CompanyID:  companyID,
-						PlanRoleID: role.ID,
-						Role:       role.Role,
-						Department: role.Department,
-						ReportsTo:  role.ReportsTo,
-					}, nil)
-				}
-			}
-		}
-	}
-
-	http.Redirect(w, r, "/companies/"+companyID+"?msg=Building+your+team...", http.StatusSeeOther)
+	// Company created with status='pending'. Use /companies/{id}/build to hire the CEO.
+	http.Redirect(w, r, "/companies/"+companyID+"?msg=Company+created.+Click+Build+to+hire+your+CEO.", http.StatusSeeOther)
 }
 
 // Show handles GET /companies/{id}.
@@ -160,71 +135,91 @@ func (h *CompanyHandler) Show(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ctx := r.Context()
 
-	var company domain.Company
-	err := h.DB.Pool.QueryRow(ctx,
-		`SELECT id, name, COALESCE(mission,''), status, created_at FROM companies WHERE id = $1`, id,
-	).Scan(&company.ID, &company.Name, &company.Mission, &company.Status, &company.CreatedAt)
+	c, err := h.q().GetCompany(ctx, id)
 	if err != nil {
 		http.Error(w, "company not found", http.StatusNotFound)
 		return
 	}
+	company := domain.Company{
+		ID:        c.ID,
+		Name:      c.Name,
+		Mission:   db.Deref(c.Mission),
+		Status:    c.Status,
+		CreatedAt: db.PgTime(c.CreatedAt),
+	}
 
-	rows, err := h.DB.Pool.Query(ctx,
-		`SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''), type, status, COALESCE(slack_user_id,''), created_at
-		 FROM employees WHERE company_id = $1 ORDER BY created_at ASC`, id)
+	empRows, err := h.q().ListEmployeesByCompany(ctx, id)
 	if err != nil {
 		http.Error(w, "failed to load employees", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
-	var employees []domain.Employee
-	for rows.Next() {
-		var e domain.Employee
-		if err := rows.Scan(&e.ID, &e.CompanyID, &e.Name, &e.Role, &e.Specialties, &e.Type, &e.Status, &e.SlackUserID, &e.CreatedAt); err != nil {
-			http.Error(w, "scan error", http.StatusInternalServerError)
-			return
+	employees := make([]domain.Employee, len(empRows))
+	for i, e := range empRows {
+		employees[i] = domain.Employee{
+			ID:              e.ID,
+			CompanyID:       e.CompanyID,
+			Name:            db.Deref(e.Name),
+			Role:            e.Role,
+			Specialties:     db.Deref(e.Specialties),
+			Type:            e.Type,
+			Status:          e.Status,
+			SlackUserID:     db.Deref(e.SlackUserID),
+			ContainerID:     db.Deref(e.ContainerID),
+			ContainerStatus: db.Deref(e.ContainerStatus),
+			CreatedAt:       db.PgTime(e.CreatedAt),
 		}
-		employees = append(employees, e)
 	}
 
 	flashMsg := r.URL.Query().Get("msg")
 
-	var policyDoc string
-	_ = h.DB.Pool.QueryRow(ctx, `SELECT COALESCE(policy_doc,'') FROM companies WHERE id = $1`, id).Scan(&policyDoc)
+	policyDoc, _ := h.q().GetCompanyPolicy(ctx, id)
 
 	var financials *domain.CompanyFinancials
-	var fin domain.CompanyFinancials
-	err = h.DB.Pool.QueryRow(ctx, `
-		SELECT id, company_id,
-		       COALESCE(bank_name,''), COALESCE(account_name,''),
-		       COALESCE(bsb,''), COALESCE(account_number,''),
-		       COALESCE(swift_code,''), COALESCE(payment_provider,''),
-		       COALESCE(invoice_prefix,'INV'), COALESCE(invoice_counter,1),
-		       COALESCE(currency,'AUD'), created_at
-		FROM company_financials WHERE company_id = $1`, id,
-	).Scan(
-		&fin.ID, &fin.CompanyID,
-		&fin.BankName, &fin.AccountName,
-		&fin.BSB, &fin.AccountNumber,
-		&fin.SwiftCode, &fin.PaymentProvider,
-		&fin.InvoicePrefix, &fin.InvoiceCounter,
-		&fin.InvoiceCurrency, &fin.CreatedAt,
-	)
+	fin, err := h.q().GetCompanyFinancials(ctx, id)
 	if err == nil {
-		financials = &fin
+		financials = &domain.CompanyFinancials{
+			ID:              fin.ID,
+			CompanyID:       fin.CompanyID,
+			BankName:        db.Deref(fin.BankName),
+			AccountName:     db.Deref(fin.AccountName),
+			BSB:             db.Deref(fin.Bsb),
+			AccountNumber:   db.Deref(fin.AccountNumber),
+			SwiftCode:       db.Deref(fin.SwiftCode),
+			PaymentProvider: db.Deref(fin.PaymentProvider),
+			InvoicePrefix:   db.Deref(fin.InvoicePrefix),
+			InvoiceCurrency: db.Deref(fin.Currency),
+			CreatedAt:       db.PgTime(fin.CreatedAt),
+		}
+		if fin.InvoiceCounter != nil {
+			financials.InvoiceCounter = int(*fin.InvoiceCounter)
+		}
 	}
 
-	templ.Handler(pages.CompanyShow(company, employees, flashMsg, policyDoc, financials)).ServeHTTP(w, r)
+	// Load proposed hires.
+	var proposedHires []pages.ProposedHireRow
+	if hires, phErr := h.q().ListProposedHiresByCompany(ctx, id); phErr == nil {
+		for _, ph := range hires {
+			proposedHires = append(proposedHires, pages.ProposedHireRow{
+				ID:           ph.ID,
+				Role:         ph.Role,
+				Department:   db.Deref(ph.Department),
+				Rationale:    db.Deref(ph.Rationale),
+				ReportsTo:    db.Deref(ph.ReportsTo),
+				Status:       ph.Status,
+				ProposerName: ph.ProposerName,
+				CreatedAt:    db.PgTime(ph.CreatedAt),
+			})
+		}
+	}
+
+	templ.Handler(pages.CompanyShow(company, employees, flashMsg, policyDoc, financials, proposedHires)).ServeHTTP(w, r)
 }
 
 // GetPolicy handles GET /companies/{id}/policy.
 func (h *CompanyHandler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var policyDoc string
-	err := h.DB.Pool.QueryRow(r.Context(),
-		`SELECT COALESCE(policy_doc,'') FROM companies WHERE id = $1`, id,
-	).Scan(&policyDoc)
+	policyDoc, err := h.q().GetCompanyPolicy(r.Context(), id)
 	if err != nil {
 		http.Error(w, "company not found", http.StatusNotFound)
 		return
@@ -238,30 +233,32 @@ func (h *CompanyHandler) GetFinancials(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ctx := r.Context()
 
-	var fin domain.CompanyFinancials
-	err := h.DB.Pool.QueryRow(ctx, `
-		SELECT id, company_id,
-		       COALESCE(bank_name,''), COALESCE(account_name,''),
-		       COALESCE(bsb,''), COALESCE(account_number,''),
-		       COALESCE(swift_code,''), COALESCE(payment_provider,''),
-		       COALESCE(invoice_prefix,'INV'), COALESCE(invoice_counter,1),
-		       COALESCE(currency,'AUD'), created_at
-		FROM company_financials WHERE company_id = $1`, id,
-	).Scan(
-		&fin.ID, &fin.CompanyID,
-		&fin.BankName, &fin.AccountName,
-		&fin.BSB, &fin.AccountNumber,
-		&fin.SwiftCode, &fin.PaymentProvider,
-		&fin.InvoicePrefix, &fin.InvoiceCounter,
-		&fin.InvoiceCurrency, &fin.CreatedAt,
-	)
+	fin, err := h.q().GetCompanyFinancials(ctx, id)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"financials": nil})
 		return
 	}
+
+	result := domain.CompanyFinancials{
+		ID:              fin.ID,
+		CompanyID:       fin.CompanyID,
+		BankName:        db.Deref(fin.BankName),
+		AccountName:     db.Deref(fin.AccountName),
+		BSB:             db.Deref(fin.Bsb),
+		AccountNumber:   db.Deref(fin.AccountNumber),
+		SwiftCode:       db.Deref(fin.SwiftCode),
+		PaymentProvider: db.Deref(fin.PaymentProvider),
+		InvoicePrefix:   db.Deref(fin.InvoicePrefix),
+		InvoiceCurrency: db.Deref(fin.Currency),
+		CreatedAt:       db.PgTime(fin.CreatedAt),
+	}
+	if fin.InvoiceCounter != nil {
+		result.InvoiceCounter = int(*fin.InvoiceCounter)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"financials": fin})
+	_ = json.NewEncoder(w).Encode(map[string]any{"financials": result})
 }
 
 // SetFinancials handles POST /companies/{id}/financials.
@@ -289,19 +286,18 @@ func (h *CompanyHandler) SetFinancials(w http.ResponseWriter, r *http.Request) {
 		currency = "AUD"
 	}
 
-	finID := newID()
-	_, err := h.DB.Pool.Exec(ctx, `
-		INSERT INTO company_financials
-		  (id, company_id, bank_name, account_name, bsb, account_number,
-		   swift_code, payment_provider, invoice_prefix, currency)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		ON CONFLICT (company_id) DO UPDATE SET
-		  bank_name=$3, account_name=$4, bsb=$5, account_number=$6,
-		  swift_code=$7, payment_provider=$8, invoice_prefix=$9, currency=$10,
-		  updated_at=NOW()`,
-		finID, id, bankName, accountName, bsb, accountNumber,
-		swiftCode, paymentProvider, invoicePrefix, currency,
-	)
+	err := h.q().UpsertCompanyFinancials(ctx, dao.UpsertCompanyFinancialsParams{
+		ID:              newID(),
+		CompanyID:       id,
+		BankName:        db.Ref(bankName),
+		AccountName:     db.Ref(accountName),
+		Bsb:             db.Ref(bsb),
+		AccountNumber:   db.Ref(accountNumber),
+		SwiftCode:       db.Ref(swiftCode),
+		PaymentProvider: db.Ref(paymentProvider),
+		InvoicePrefix:   db.Ref(invoicePrefix),
+		Currency:        db.Ref(currency),
+	})
 	if err != nil {
 		http.Error(w, "failed to save financials", http.StatusInternalServerError)
 		return
@@ -403,9 +399,10 @@ func (h *CompanyHandler) SetPolicy(w http.ResponseWriter, r *http.Request) {
 		content = r.FormValue("policy")
 	}
 
-	_, err := h.DB.Pool.Exec(ctx,
-		`UPDATE companies SET policy_doc = $1 WHERE id = $2`, content, id,
-	)
+	err := h.q().UpdateCompanyPolicy(ctx, dao.UpdateCompanyPolicyParams{
+		ID:        id,
+		PolicyDoc: db.Ref(content),
+	})
 	if err != nil {
 		http.Error(w, "failed to update policy", http.StatusInternalServerError)
 		return

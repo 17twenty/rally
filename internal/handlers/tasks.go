@@ -7,6 +7,7 @@ import (
 	"github.com/a-h/templ"
 
 	"github.com/17twenty/rally/internal/db"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/templates/pages"
 )
@@ -15,6 +16,8 @@ import (
 type TaskHandler struct {
 	DB *db.DB
 }
+
+func (h *TaskHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
 
 // List handles GET /tasks.
 func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -30,19 +33,19 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
 		// Load companies for filter dropdown.
-		compRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, name, COALESCE(mission,''), status, created_at FROM companies ORDER BY name`)
-		if err == nil {
-			defer compRows.Close()
-			for compRows.Next() {
-				var c domain.Company
-				if scanErr := compRows.Scan(&c.ID, &c.Name, &c.Mission, &c.Status, &c.CreatedAt); scanErr == nil {
-					data.Companies = append(data.Companies, c)
-				}
+		if companies, err := h.q().ListCompaniesByName(ctx); err == nil {
+			for _, c := range companies {
+				data.Companies = append(data.Companies, domain.Company{
+					ID:        c.ID,
+					Name:      c.Name,
+					Mission:   db.Deref(c.Mission),
+					Status:    c.Status,
+					CreatedAt: db.PgTime(c.CreatedAt),
+				})
 			}
 		}
 
-		// Build task query with optional filters.
+		// Build task query with optional filters (dynamic WHERE — stays as raw SQL).
 		query := `
 			SELECT t.id, t.company_id, t.title, COALESCE(t.description,''),
 			       COALESCE(t.assignee_id,''), t.status,
@@ -96,31 +99,31 @@ func (h *TaskHandler) New(w http.ResponseWriter, r *http.Request) {
 	if h.DB != nil {
 		ctx := r.Context()
 
-		compRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, name, COALESCE(mission,''), status, created_at FROM companies ORDER BY name`)
-		if err == nil {
-			defer compRows.Close()
-			for compRows.Next() {
-				var c domain.Company
-				if scanErr := compRows.Scan(&c.ID, &c.Name, &c.Mission, &c.Status, &c.CreatedAt); scanErr == nil {
-					data.Companies = append(data.Companies, c)
-				}
+		if companies, err := h.q().ListCompaniesByName(ctx); err == nil {
+			for _, c := range companies {
+				data.Companies = append(data.Companies, domain.Company{
+					ID:        c.ID,
+					Name:      c.Name,
+					Mission:   db.Deref(c.Mission),
+					Status:    c.Status,
+					CreatedAt: db.PgTime(c.CreatedAt),
+				})
 			}
 		}
 
-		empRows, err := h.DB.Pool.Query(ctx,
-			`SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''), type, status, COALESCE(slack_user_id,''), created_at
-			 FROM employees ORDER BY type, role`)
-		if err == nil {
-			defer empRows.Close()
-			for empRows.Next() {
-				var e domain.Employee
-				if scanErr := empRows.Scan(
-					&e.ID, &e.CompanyID, &e.Name, &e.Role, &e.Specialties,
-					&e.Type, &e.Status, &e.SlackUserID, &e.CreatedAt,
-				); scanErr == nil {
-					data.Employees = append(data.Employees, e)
-				}
+		if employees, err := h.q().ListAllEmployees(ctx); err == nil {
+			for _, e := range employees {
+				data.Employees = append(data.Employees, domain.Employee{
+					ID:          e.ID,
+					CompanyID:   e.CompanyID,
+					Name:        db.Deref(e.Name),
+					Role:        e.Role,
+					Specialties: db.Deref(e.Specialties),
+					Type:        e.Type,
+					Status:      e.Status,
+					SlackUserID: db.Deref(e.SlackUserID),
+					CreatedAt:   db.PgTime(e.CreatedAt),
+				})
 			}
 		}
 	}
@@ -151,15 +154,15 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	if h.DB != nil {
 		ctx := r.Context()
-		var assigneeArg *string
-		if assigneeID != "" {
-			assigneeArg = &assigneeID
-		}
-		_, err := h.DB.Pool.Exec(ctx,
-			`INSERT INTO tasks (id, company_id, title, description, assignee_id, status, slack_channel)
-			 VALUES ($1, $2, $3, $4, $5, 'open', $6)`,
-			taskID, companyID, title, description, assigneeArg, slackChannel,
-		)
+		_, err := h.q().CreateTask(ctx, dao.CreateTaskParams{
+			ID:           taskID,
+			CompanyID:    companyID,
+			Title:        title,
+			Description:  db.Ref(description),
+			AssigneeID:   db.Ref(assigneeID),
+			Status:       "open",
+			SlackChannel: db.Ref(slackChannel),
+		})
 		if err != nil {
 			http.Error(w, "failed to create task", http.StatusInternalServerError)
 			return
@@ -181,26 +184,25 @@ func (h *TaskHandler) Show(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	err := h.DB.Pool.QueryRow(ctx, `
-		SELECT t.id, t.company_id, t.title, COALESCE(t.description,''),
-		       COALESCE(t.assignee_id,''), t.status,
-		       COALESCE(t.slack_thread_ts,''), COALESCE(t.slack_channel,''), t.created_at,
-		       COALESCE(e.name, e.role, '') as assignee_name,
-		       COALESCE(co.name, '') as company_name
-		FROM tasks t
-		LEFT JOIN employees e ON t.assignee_id = e.id
-		LEFT JOIN companies co ON t.company_id = co.id
-		WHERE t.id = $1`, id,
-	).Scan(
-		&data.Task.ID, &data.Task.CompanyID, &data.Task.Title, &data.Task.Description,
-		&data.Task.AssigneeID, &data.Task.Status,
-		&data.Task.SlackThreadTS, &data.Task.SlackChannel, &data.Task.CreatedAt,
-		&data.AssigneeName, &data.CompanyName,
-	)
+	row, err := h.q().GetTaskDetail(ctx, id)
 	if err != nil {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
 	}
+
+	data.Task = domain.Task{
+		ID:            row.ID,
+		CompanyID:     row.CompanyID,
+		Title:         row.Title,
+		Description:   row.Description,
+		AssigneeID:    row.AssigneeID,
+		Status:        row.Status,
+		SlackThreadTS: row.SlackThreadTs,
+		SlackChannel:  row.SlackChannel,
+		CreatedAt:     db.PgTime(row.CreatedAt),
+	}
+	data.AssigneeName = row.AssigneeName
+	data.CompanyName = row.CompanyName
 
 	templ.Handler(pages.TaskDetail(data)).ServeHTTP(w, r)
 }
@@ -222,8 +224,10 @@ func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 	if h.DB != nil {
 		ctx := r.Context()
-		_, err := h.DB.Pool.Exec(ctx,
-			`UPDATE tasks SET status = $1 WHERE id = $2`, status, id)
+		err := h.q().UpdateTaskStatus(ctx, dao.UpdateTaskStatusParams{
+			ID:     id,
+			Status: status,
+		})
 		if err != nil {
 			http.Error(w, "failed to update status", http.StatusInternalServerError)
 			return

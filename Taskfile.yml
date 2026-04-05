@@ -166,11 +166,6 @@ tasks:
     cmds:
       - templ generate
 
-  playwright:install:
-    desc: Install Playwright browsers
-    cmds:
-      - go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
-
   dev:
     desc: Start development server with hot reload
     preconditions:

@@ -2,31 +2,10 @@ package config
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/17twenty/rally/internal/domain"
 	"gopkg.in/yaml.v3"
 )
-
-// employeeConfigYAML mirrors the PRD §6.2 YAML format with snake_case keys.
-type employeeConfigYAML struct {
-	Employee struct {
-		ID        string `yaml:"id"`
-		Role      string `yaml:"role"`
-		ReportsTo string `yaml:"reports_to"`
-	} `yaml:"employee"`
-	Identity struct {
-		SoulFile string `yaml:"soul_file"`
-	} `yaml:"identity"`
-	Cognition struct {
-		DefaultModelRef string            `yaml:"default_model_ref"`
-		Routing         map[string]string `yaml:"routing"`
-	} `yaml:"cognition"`
-	Runtime struct {
-		HeartbeatSeconds int `yaml:"heartbeat_seconds"`
-	} `yaml:"runtime"`
-	Tools map[string]bool `yaml:"tools"`
-}
 
 type modelRegistryYAML struct {
 	Models []struct {
@@ -45,52 +24,6 @@ type providerRegistryYAML struct {
 		BaseURL   string `yaml:"base_url"`
 		APIKeyEnv string `yaml:"api_key_env"`
 	} `yaml:"providers"`
-}
-
-// LoadEmployeeConfig parses a single employee YAML config file.
-func LoadEmployeeConfig(path string) (*domain.EmployeeConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var raw employeeConfigYAML
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return nil, err
-	}
-
-	cfg := &domain.EmployeeConfig{}
-	cfg.ID = raw.Employee.ID
-	cfg.Employee.ID = raw.Employee.ID
-	cfg.Employee.Role = raw.Employee.Role
-	cfg.Employee.ReportsTo = raw.Employee.ReportsTo
-	cfg.Identity.SoulFile = raw.Identity.SoulFile
-	cfg.Cognition.DefaultModelRef = raw.Cognition.DefaultModelRef
-	cfg.Cognition.Routing = raw.Cognition.Routing
-	cfg.Runtime.HeartbeatSeconds = raw.Runtime.HeartbeatSeconds
-	cfg.Tools = raw.Tools
-	return cfg, nil
-}
-
-// LoadEmployeeConfigsDir loads all .yaml files in a directory as employee configs.
-func LoadEmployeeConfigsDir(dir string) ([]*domain.EmployeeConfig, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	var configs []*domain.EmployeeConfig
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
-			continue
-		}
-		cfg, err := LoadEmployeeConfig(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			return nil, err
-		}
-		configs = append(configs, cfg)
-	}
-	return configs, nil
 }
 
 // LoadModelConfig parses the model registry YAML and returns the first entry.

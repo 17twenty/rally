@@ -97,17 +97,35 @@ func (m *Manager) EnsureWorkspaceDirs(companyID, employeeID string) (sharedDir, 
 	return sharedDir, scratchDir, nil
 }
 
+// SeedWorkspace writes initial files to the shared workspace if they don't exist.
+func SeedWorkspace(sharedDir, companyName, mission, policyDoc string) {
+	readmePath := filepath.Join(sharedDir, "README.md")
+	if _, err := os.Stat(readmePath); err != nil {
+		content := fmt.Sprintf("# %s\n\n%s\n\nThis is the shared workspace for all team members.\n", companyName, mission)
+		_ = os.WriteFile(readmePath, []byte(content), 0o644)
+	}
+
+	if policyDoc != "" {
+		policyPath := filepath.Join(sharedDir, "POLICIES.md")
+		if _, err := os.Stat(policyPath); err != nil {
+			_ = os.WriteFile(policyPath, []byte(policyDoc), 0o644)
+		}
+	}
+}
+
 // CreateAndStartOpts holds the parameters for creating an AE container.
 type CreateAndStartOpts struct {
 	ContainerName string
 	EmployeeID    string
 	CompanyID     string
 	CompanyName   string
+	CompanyMission string
 	Role          string
 	AEName        string
 	APIToken      string
 	SoulMD        string
 	ConfigJSON    string // JSON-encoded EmployeeConfig
+	PolicyDoc     string // company policy for workspace seeding
 }
 
 // CreateAndStart creates and starts a Docker container for an AE.
@@ -116,6 +134,9 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateAndStartOpts) (
 	if err != nil {
 		return "", err
 	}
+
+	// Seed shared workspace with company README and policies on first hire.
+	SeedWorkspace(sharedDir, opts.CompanyName, opts.CompanyMission, opts.PolicyDoc)
 
 	if err := m.EnsureNetwork(ctx); err != nil {
 		return "", err

@@ -148,6 +148,19 @@ type OrgStructure struct {
 	Department *string `json:"department"`
 }
 
+type ProposedHire struct {
+	ID         string             `json:"id"`
+	CompanyID  string             `json:"company_id"`
+	ProposedBy string             `json:"proposed_by"`
+	Role       string             `json:"role"`
+	Department *string            `json:"department"`
+	Rationale  *string            `json:"rationale"`
+	ReportsTo  *string            `json:"reports_to"`
+	Status     string             `json:"status"`
+	ReviewedBy *string            `json:"reviewed_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type ProviderRegistry struct {
 	ID        string             `json:"id"`
 	Name      string             `json:"name"`

@@ -104,6 +104,7 @@ func main() {
 		ModelRef:       modelRef,
 		MaxTurns:       maxTurns,
 		RemoteToolDefs: remoteToolDefs,
+		ScratchPath:    envOr("SCRATCH_PATH", "/home/ae/scratch"),
 	}
 
 	// Graceful shutdown
