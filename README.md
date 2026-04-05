@@ -221,15 +221,59 @@ The shared workspace is seeded with `README.md` and `POLICIES.md` on first hire.
 
 ## Slack Integration
 
-Rally AEs communicate with your team via Slack. To set up:
+Rally AEs communicate with your team via Slack. Setup takes ~5 minutes.
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app
-2. Add the required bot scopes (see `.env.example` for the full list)
-3. Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` in `.env`
-4. Start Rally and visit **Settings** → click **Connect** next to Slack
-5. Authorize the app in your workspace — Rally stores the bot token automatically
+### 1. Create a Slack App
 
-AEs post messages as `[AEName] message` in channels. They receive Slack events via the `/slack/events` webhook endpoint.
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
+2. Name it "Rally" and select your workspace
+
+### 2. Get Your Credentials
+
+Go to **Basic Information** → **App Credentials** (NOT the tokens on the main page):
+- Copy **Client ID** → `SLACK_CLIENT_ID` in `.env`
+- Copy **Client Secret** → `SLACK_CLIENT_SECRET` in `.env`
+- Copy **Signing Secret** → `SLACK_SIGNING_SECRET` in `.env`
+
+### 3. Configure Bot Scopes
+
+Go to **OAuth & Permissions** → **Bot Token Scopes** and add:
+
+```
+chat:write, chat:write.public, channels:read, channels:join,
+channels:history, groups:read, groups:history, im:read, im:write,
+im:history, mpim:read, users:read, users:read.email,
+app_mentions:read, reactions:write
+```
+
+### 4. Set Redirect URL
+
+Under **OAuth & Permissions** → **Redirect URLs**, add:
+```
+http://localhost:8432/slack/oauth/callback
+```
+
+> **Note:** Slack may require HTTPS for redirect URLs. If so, you'll need to use `https://localhost:8432/slack/oauth/callback` and configure Rally with TLS.
+
+### 5. Connect Rally to Slack
+
+1. Start Rally: `task server`
+2. Visit **Settings** (http://localhost:8432/setup) → click **Connect** next to Slack
+3. Authorize the app in your workspace
+4. Rally stores the bot token automatically — AEs can post to Slack immediately
+
+### 6. Enable Event Subscriptions (for receiving messages)
+
+To let AEs **receive** Slack messages (not just send), enable events:
+
+1. Go to **Event Subscriptions** → toggle **Enable Events**
+2. Set **Request URL** to `https://<your-public-url>/slack/events`
+   - For local dev, use [ngrok](https://ngrok.com): `ngrok http 8432`
+   - Or enable **Socket Mode** if available in your app settings
+3. Under **Subscribe to bot events**, add:
+   - `message.channels`, `message.groups`, `message.im`, `app_mention`
+
+AEs post messages as `[AEName] message` in channels. They receive and route Slack events to the relevant AE based on mentions and channel routing.
 
 ---
 
