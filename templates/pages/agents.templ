@@ -1,0 +1,80 @@
+package pages
+
+import (
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/table"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ Agents(data AgentsPageData) {
+	@layout.Page("Agents") {
+		<div class="space-y-6">
+			<div class="flex items-center justify-between">
+				<h1 class="text-2xl font-bold">Agents</h1>
+			</div>
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						All Employees
+					}
+					@card.Description() {
+						AE and human team members
+					}
+				}
+				@card.Content() {
+					if len(data.Agents) == 0 {
+						<p class="text-sm text-muted-foreground">No employees found.</p>
+					} else {
+						@table.Table() {
+							@table.Header() {
+								@table.Row() {
+									@table.Head() { Name }
+									@table.Head() { Role }
+									@table.Head() { Type }
+									@table.Head() { Status }
+									@table.Head() { Last Active }
+									@table.Head() { Actions }
+								}
+							}
+							@table.Body() {
+								for _, ac := range data.Agents {
+									@table.Row() {
+										@table.Cell() {
+											if ac.Employee.Name != "" {
+												{ ac.Employee.Name }
+											} else {
+												{ ac.Employee.Role }
+											}
+										}
+										@table.Cell() {
+											{ ac.Employee.Role }
+										}
+										@table.Cell() {
+											@employeeTypeBadge(ac.Employee.Type)
+										}
+										@table.Cell() {
+											@agentStatBadge(ac.Employee.Status)
+										}
+										@table.Cell() {
+											if !ac.LastActive.IsZero() {
+												{ ac.LastActive.Format("Jan 2 15:04") }
+											} else {
+												<span class="text-muted-foreground">—</span>
+											}
+										}
+										@table.Cell() {
+											@button.Button(button.Props{Href: "/agents/" + ac.Employee.ID, Variant: button.VariantOutline, Size: button.SizeSm}) {
+												View
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		</div>
+	}
+}

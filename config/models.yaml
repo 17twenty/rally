@@ -1,0 +1,20 @@
+default_model: greenthread-gpt-oss-120b
+
+models:
+  - id: claude-sonnet-4-6
+    name: Claude Sonnet 4.6
+    model_name: claude-sonnet-4-6-20250514
+    provider_id: anthropic
+    context_window: 200000
+
+  - id: gpt-4o
+    name: GPT-4o
+    model_name: gpt-4o
+    provider_id: openai
+    context_window: 128000
+
+  - id: greenthread-gpt-oss-120b
+    name: GPT-OSS 120B (Greenthread)
+    model_name: openai/gpt-oss-120b
+    provider_id: greenthread
+    context_window: 128000

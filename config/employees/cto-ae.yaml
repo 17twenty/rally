@@ -1,0 +1,22 @@
+employee:
+  id: cto-ae
+  role: CTO
+  reports_to: ceo-ae
+
+identity:
+  soul_file: soul.md
+
+cognition:
+  default_model_ref: greenthread-gpt-oss-120b
+  routing:
+    planning: greenthread-gpt-oss-120b
+    execution: greenthread-gpt-oss-120b
+    code_review: greenthread-gpt-oss-120b
+
+runtime:
+  heartbeat_seconds: 300
+
+tools:
+  slack: true
+  github: true
+  shell: true

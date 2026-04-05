@@ -1,0 +1,18 @@
+providers:
+  - id: anthropic
+    name: Anthropic
+    api_style: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+
+  - id: openai
+    name: OpenAI
+    api_style: openai
+    base_url: https://api.openai.com
+    api_key_env: OPENAI_API_KEY
+
+  - id: greenthread
+    name: Greenthread
+    api_style: openai
+    base_url: "https://api.us-west-2.ai.amaze.au"
+    api_key_env: GREENTHREAD_API_KEY

@@ -1,0 +1,16 @@
+package layout
+
+import "github.com/17twenty/rally/components/sidebar"
+
+templ Page(title string) {
+	@Base(title) {
+		@sidebar.Layout() {
+			@Sidebar()
+			@sidebar.Inset() {
+				<div class="flex flex-1 flex-col gap-4 p-6">
+					{ children... }
+				</div>
+			}
+		}
+	}
+}

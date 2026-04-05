@@ -1,0 +1,278 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/17twenty/rally/components/badge"
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/dialog"
+	"github.com/17twenty/rally/components/table"
+	"github.com/17twenty/rally/components/textarea"
+	"github.com/17twenty/rally/internal/workspace"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+// WorkspaceList renders the workspace file browser.
+templ WorkspaceList(companyID string, files []workspace.WorkspaceFile) {
+	@layout.Page("Workspace") {
+		<div class="space-y-4">
+			<div class="flex items-center justify-between">
+				<h1 class="text-2xl font-bold">Workspace</h1>
+				@dialog.Dialog() {
+					@dialog.Trigger() {
+						@button.Button(button.Props{}) {
+							+ Add File
+						}
+					}
+					@dialog.Content() {
+						@dialog.Header() {
+							@dialog.Title() {
+								Add Workspace File
+							}
+						}
+						<form method="POST" action="/workspace" class="space-y-4">
+							<input type="hidden" name="company_id" value={ companyID }/>
+							<div class="space-y-1">
+								<label class="text-sm font-medium">Path</label>
+								<input type="text" name="path" placeholder="e.g. docs/roadmap.md" required
+									class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"/>
+							</div>
+							<div class="space-y-1">
+								<label class="text-sm font-medium">Title</label>
+								<input type="text" name="title" placeholder="File title"
+									class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"/>
+							</div>
+							<div class="space-y-1">
+								<label class="text-sm font-medium">Content</label>
+								@textarea.Textarea(textarea.Props{
+									Name:        "content",
+									Placeholder: "File content...",
+									Rows:        8,
+									Attributes:  templ.Attributes{"required": true},
+								})
+							</div>
+							@button.Button(button.Props{Type: button.TypeSubmit}) {
+								Save File
+							}
+						</form>
+					}
+				}
+			</div>
+			@card.Card() {
+				@card.Content(card.ContentProps{Class: "p-0"}) {
+					if len(files) == 0 {
+						<div class="flex flex-col items-center justify-center gap-3 py-12 text-center">
+							<p class="text-muted-foreground">No workspace files yet.</p>
+						</div>
+					} else {
+						@table.Table() {
+							@table.Header() {
+								@table.Row() {
+									@table.Head() { Path }
+									@table.Head() { Title }
+									@table.Head() { Status }
+									@table.Head() { Version }
+									@table.Head() { Created By }
+									@table.Head() { Updated }
+									@table.Head() { }
+								}
+							}
+							@table.Body() {
+								for _, f := range files {
+									@table.Row() {
+										@table.Cell() {
+											<span class="font-mono text-sm">{ f.Path }</span>
+										}
+										@table.Cell() {
+											<span class="font-medium">{ f.Title }</span>
+										}
+										@table.Cell() {
+											@workspaceStatusBadge(f.Status)
+										}
+										@table.Cell() {
+											<span class="text-muted-foreground text-sm">v{ fmt.Sprintf("%d", f.Version) }</span>
+										}
+										@table.Cell() {
+											<span class="text-muted-foreground text-sm">{ f.CreatedBy }</span>
+										}
+										@table.Cell() {
+											<span class="text-muted-foreground text-sm">{ f.UpdatedAt.Format("Jan 2, 2006") }</span>
+										}
+										@table.Cell() {
+											<div class="flex items-center gap-2">
+												@button.Button(button.Props{
+													Href:    "/workspace/" + f.ID,
+													Variant: button.VariantOutline,
+													Size:    button.SizeSm,
+												}) {
+													View
+												}
+												if f.Status == "pending" {
+													<form method="POST" action={ templ.SafeURL("/workspace/" + f.ID + "/approve") }>
+														<input type="hidden" name="approved_by" value="admin"/>
+														@button.Button(button.Props{
+															Type:    button.TypeSubmit,
+															Variant: button.VariantDefault,
+															Size:    button.SizeSm,
+														}) {
+															Approve
+														}
+													</form>
+												}
+											</div>
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		</div>
+	}
+}
+
+// WorkspaceDetail renders the file detail view with comments and version history.
+templ WorkspaceDetail(f workspace.WorkspaceFile, comments []workspace.WorkspaceComment, versions []workspace.WorkspaceVersion) {
+	@layout.Page("Workspace — " + f.Title) {
+		<div class="space-y-6">
+			<div class="flex items-center gap-4">
+				@button.Button(button.Props{
+					Href:    "/workspace",
+					Variant: button.VariantOutline,
+					Size:    button.SizeSm,
+				}) {
+					← Back
+				}
+				<div>
+					<h1 class="text-2xl font-bold">{ f.Title }</h1>
+					<p class="text-sm text-muted-foreground font-mono">{ f.Path }</p>
+				</div>
+				<div class="ml-auto flex items-center gap-2">
+					@workspaceStatusBadge(f.Status)
+					<span class="text-sm text-muted-foreground">v{ fmt.Sprintf("%d", f.Version) }</span>
+					if f.Status == "pending" {
+						<form method="POST" action={ templ.SafeURL("/workspace/" + f.ID + "/approve") }>
+							<input type="hidden" name="approved_by" value="admin"/>
+							@button.Button(button.Props{
+								Type:    button.TypeSubmit,
+								Variant: button.VariantDefault,
+								Size:    button.SizeSm,
+							}) {
+								Approve
+							}
+						</form>
+					}
+				</div>
+			</div>
+
+			<!-- File content -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Content
+					}
+				}
+				@card.Content(card.ContentProps{}) {
+					<pre class="whitespace-pre-wrap text-sm font-mono bg-muted rounded-md p-4 overflow-x-auto">{ f.Content }</pre>
+				}
+			}
+
+			<!-- Comment thread -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Comments
+					}
+				}
+				@card.Content(card.ContentProps{}) {
+					<div class="space-y-4">
+						if len(comments) == 0 {
+							<p class="text-sm text-muted-foreground">No comments yet.</p>
+						} else {
+							for _, c := range comments {
+								<div class="border rounded-md p-3 space-y-1">
+									<div class="flex items-center justify-between">
+										<span class="text-sm font-medium">{ c.AuthorID }</span>
+										<span class="text-xs text-muted-foreground">{ c.CreatedAt.Format("Jan 2, 2006 15:04") }</span>
+									</div>
+									<p class="text-sm">{ c.Body }</p>
+								</div>
+							}
+						}
+						<form method="POST" action={ templ.SafeURL("/workspace/" + f.ID + "/comment") } class="space-y-2">
+							@textarea.Textarea(textarea.Props{
+								Name:        "body",
+								Placeholder: "Add a comment...",
+								Rows:        3,
+								Attributes:  templ.Attributes{"required": true},
+							})
+							<input type="hidden" name="author_id" value="admin"/>
+							@button.Button(button.Props{Type: button.TypeSubmit, Size: button.SizeSm}) {
+								Post Comment
+							}
+						</form>
+					</div>
+				}
+			}
+
+			<!-- Version history -->
+			if len(versions) > 0 {
+				@card.Card() {
+					@card.Header() {
+						@card.Title() {
+							Version History
+						}
+					}
+					@card.Content(card.ContentProps{Class: "p-0"}) {
+						@table.Table() {
+							@table.Header() {
+								@table.Row() {
+									@table.Head() { Version }
+									@table.Head() { Created By }
+									@table.Head() { Date }
+								}
+							}
+							@table.Body() {
+								for _, v := range versions {
+									@table.Row() {
+										@table.Cell() {
+											<span class="font-mono text-sm">v{ fmt.Sprintf("%d", v.Version) }</span>
+										}
+										@table.Cell() {
+											<span class="text-sm">{ v.CreatedBy }</span>
+										}
+										@table.Cell() {
+											<span class="text-sm text-muted-foreground">{ v.CreatedAt.Format("Jan 2, 2006 15:04") }</span>
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		</div>
+	}
+}
+
+templ workspaceStatusBadge(status string) {
+	switch status {
+	case "active":
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			{ status }
+		}
+	case "pending":
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			{ status }
+		}
+	case "archived":
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			{ status }
+		}
+	default:
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			{ status }
+		}
+	}
+}

@@ -1,0 +1,103 @@
+package pages
+
+import (
+	"github.com/17twenty/rally/components/badge"
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/table"
+	"github.com/17twenty/rally/internal/domain"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ KBList(companyID string, entries []domain.KnowledgebaseEntry) {
+	@layout.Page("Knowledgebase") {
+		<div class="space-y-4">
+			<div class="flex items-center justify-between">
+				<h1 class="text-2xl font-bold">Knowledgebase</h1>
+				@button.Button(button.Props{Href: "/kb/new?company_id=" + companyID}) {
+					+ Propose Entry
+				}
+			</div>
+			@card.Card() {
+				@card.Content(card.ContentProps{Class: "p-0"}) {
+					if len(entries) == 0 {
+						<div class="flex flex-col items-center justify-center gap-3 py-12 text-center">
+							<p class="text-muted-foreground">No knowledge base entries yet.</p>
+						</div>
+					} else {
+						@table.Table() {
+							@table.Header() {
+								@table.Row() {
+									@table.Head() { Title }
+									@table.Head() { Tags }
+									@table.Head() { Status }
+									@table.Head() { Approved By }
+									@table.Head() { Created }
+									@table.Head() { }
+								}
+							}
+							@table.Body() {
+								for _, e := range entries {
+									@table.Row() {
+										@table.Cell() {
+											<span class="font-medium">{ e.Title }</span>
+										}
+										@table.Cell() {
+											<div class="flex flex-wrap gap-1">
+												for _, tag := range e.Tags {
+													@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+														{ tag }
+													}
+												}
+											</div>
+										}
+										@table.Cell() {
+											@kbStatusBadge(e.Status)
+										}
+										@table.Cell() {
+											<span class="text-muted-foreground text-sm">{ e.ApprovedBy }</span>
+										}
+										@table.Cell() {
+											<span class="text-muted-foreground text-sm">{ e.CreatedAt.Format("Jan 2, 2006") }</span>
+										}
+										@table.Cell() {
+											if e.Status == "pending" {
+												<form method="POST" action={ templ.SafeURL("/kb/" + e.ID + "/approve") }>
+													<input type="hidden" name="approved_by" value="admin"/>
+													@button.Button(button.Props{
+														Type:    button.TypeSubmit,
+														Variant: button.VariantDefault,
+														Size:    button.SizeSm,
+													}) {
+														Approve
+													}
+												</form>
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		</div>
+	}
+}
+
+templ kbStatusBadge(status string) {
+	switch status {
+	case "active":
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			{ status }
+		}
+	case "pending":
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			{ status }
+		}
+	default:
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			{ status }
+		}
+	}
+}

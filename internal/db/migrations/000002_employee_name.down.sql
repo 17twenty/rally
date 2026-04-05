@@ -1,0 +1,2 @@
+ALTER TABLE employees DROP COLUMN IF EXISTS specialties;
+ALTER TABLE employees DROP COLUMN IF EXISTS name;

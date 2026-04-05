@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS model_registry;
+DROP TABLE IF EXISTS provider_registry;
+DROP TABLE IF EXISTS tool_logs;
+DROP TABLE IF EXISTS slack_events;
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS knowledgebase;
+DROP TABLE IF EXISTS memory_events;
+DROP TABLE IF EXISTS org_structure;
+DROP TABLE IF EXISTS employee_configs;
+DROP TABLE IF EXISTS employees;
+DROP TABLE IF EXISTS companies;

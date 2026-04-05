@@ -1,0 +1,181 @@
+version: "3"
+
+dotenv: [".env"]
+
+vars:
+  TAILWIND_CMD: npx tailwindcss
+  APP_NAME: rally
+  DB_URI:
+    sh: echo "${DB_URI:-postgres://rally:rally@localhost:5433/rally?sslmode=disable}"
+
+tasks:
+  templ:
+    desc: Run templ with integrated server and hot reload
+    cmds:
+      - templ generate --watch --proxy="http://localhost:${PORT:-8432}" --cmd="go run ./cmd/server" --open-browser=false
+
+  tailwind:
+    desc: Watch Tailwind CSS changes
+    cmds:
+      - "{{.TAILWIND_CMD}} -i ./static/input.css -o ./static/css/tailwind.css --watch"
+
+  tailwind:build:
+    desc: Build Tailwind CSS for production
+    cmds:
+      - "{{.TAILWIND_CMD}} -i ./static/input.css -o ./static/css/tailwind.css --minify"
+
+  pgcli:
+    cmds:
+      - pgcli {{.DB_URI}}
+  db-start:
+    desc: Start PostgreSQL container (detached)
+    cmds:
+      - |
+        uri="{{.DB_URI}}"
+
+        # Parse DB_URI with AWK
+        user="$(echo "$uri" | awk -F '[:/@?]+' '{print $2}')"
+        password="$(echo "$uri" | awk -F '[:/@?]+' '{print $3}')"
+        host="$(echo "$uri" | awk -F '[:/@?]+' '{print $4}')"
+        port="$(echo "$uri" | awk -F '[:/@?]+' '{print $5}')"
+        db="$(echo "$uri" | awk -F '[:/@?]+' '{print $6}')"
+
+        # Skip if already running
+        if docker ps --format '{{`{{.Names}}`}}' | grep -q '^{{.APP_NAME}}-db$'; then
+          echo "PostgreSQL container '{{.APP_NAME}}-db' already running"
+          exit 0
+        fi
+
+        echo "Starting PostgreSQL container '{{.APP_NAME}}-db'..."
+        echo "  USER=$user  DB=$db  PORT=$port"
+
+        docker run --name {{.APP_NAME}}-db \
+          -d --rm \
+          -e POSTGRES_USER="$user" \
+          -e POSTGRES_PASSWORD="$password" \
+          -e POSTGRES_DB="$db" \
+          -p "$port:5432" \
+          postgres:latest
+
+        # Wait for postgres to be ready
+        echo "Waiting for PostgreSQL to accept connections..."
+        for i in $(seq 1 30); do
+          if docker exec {{.APP_NAME}}-db pg_isready -U "$user" > /dev/null 2>&1; then
+            echo "PostgreSQL is ready"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "Timed out waiting for PostgreSQL"
+        exit 1
+
+  db-logs:
+    desc: Tail database container logs
+    cmds:
+      - docker logs -f {{.APP_NAME}}-db
+
+  db-stop:
+    desc: Stop PostgreSQL container
+    cmds:
+      - docker stop {{.APP_NAME}}-db 2>/dev/null || true
+      - echo "Stopped PostgreSQL container '{{.APP_NAME}}-db'"
+
+  db-reset:
+    desc: Destroy and recreate the database container (fresh data)
+    cmds:
+      - docker stop {{.APP_NAME}}-db 2>/dev/null || true
+      - docker volume rm {{.APP_NAME}}-db-data 2>/dev/null || true
+      - task: db-start
+
+  db-migrate:
+    desc: Apply DB and River migrations
+    cmds:
+      - migrate -path ./internal/db/migrations -database "{{.DB_URI}}" up
+      - go tool river migrate-up --database-url "{{.DB_URI}}"
+
+  server:
+    desc: Run server directly (no hot reload)
+    cmds:
+      - go run ./cmd/server
+
+  sqlc:
+    desc: Generate type-safe DB code
+    cmds:
+      - sqlc generate
+
+  build:
+    desc: Build the server binary
+    cmds:
+      - go build ./cmd/server
+
+  ae-build:
+    desc: Build the AE agent Docker image
+    cmds:
+      - docker build -t rally-ae-base:latest -f dockerfiles/ae-agent.Dockerfile .
+
+  ae-list:
+    desc: List all running AE containers
+    cmds:
+      - docker ps --filter "label=rally.employee_id" --format "table {{`{{.Names}}`}}\t{{`{{.Status}}`}}\t{{`{{.Label \"rally.role\"}}`}}"
+
+  ae-logs:
+    desc: "Tail logs for an AE container (usage: task ae-logs -- rally-acme-ceo-alex)"
+    cmds:
+      - docker logs -f {{.CLI_ARGS}}
+
+  ae-stop-all:
+    desc: Stop all AE containers
+    cmds:
+      - docker ps -q --filter "label=rally.employee_id" | xargs -r docker stop
+      - echo "All AE containers stopped"
+
+  nuke:
+    desc: "Destroy all data and AE containers (DESTRUCTIVE — starts fresh)"
+    prompt: "This will DELETE all companies, employees, tasks, and work items. Are you sure?"
+    cmds:
+      - docker ps -q --filter "label=rally.employee_id" | xargs -r docker stop
+      - docker ps -aq --filter "label=rally.employee_id" | xargs -r docker rm
+      - |
+        psql "{{.DB_URI}}" -c "
+          DELETE FROM work_item_history;
+          DELETE FROM work_items;
+          DELETE FROM ae_messages;
+          DELETE FROM ae_api_tokens;
+          DELETE FROM tool_logs;
+          DELETE FROM memory_events;
+          DELETE FROM credential_audit_log;
+          DELETE FROM access_providers;
+          DELETE FROM employee_configs;
+          DELETE FROM org_structure;
+          DELETE FROM slack_events;
+          DELETE FROM tasks;
+          DELETE FROM river_job;
+          DELETE FROM employees;
+          DELETE FROM knowledgebase;
+          DELETE FROM companies;
+        "
+      - echo "All data nuked. Visit /setup to start fresh."
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  gen:
+    desc: Run templ code generation
+    cmds:
+      - templ generate
+
+  playwright:install:
+    desc: Install Playwright browsers
+    cmds:
+      - go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+
+  dev:
+    desc: Start development server with hot reload
+    preconditions:
+      - sh: docker exec {{.APP_NAME}}-db pg_isready -U rally > /dev/null 2>&1
+        msg: "Database not ready. Run 'task db-start' first."
+    cmds:
+      - task --parallel tailwind templ
+

@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:latest
+    container_name: rally-db
+    environment:
+      POSTGRES_USER: rally
+      POSTGRES_PASSWORD: rally
+      POSTGRES_DB: rally
+    ports:
+      - "5433:5432"
+    volumes:
+      - rally-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rally"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rally-server
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://rally:rally@db:5432/rally?sslmode=disable
+      PORT: "8432"
+      RALLY_WORKSPACE_ROOT: /var/rally/workspaces
+      RALLY_API_URL: http://rally-server:8432
+    env_file:
+      - .env
+    ports:
+      - "8432:8432"
+    volumes:
+      - rally-workspaces:/var/rally/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - rally-net
+      - default
+
+volumes:
+  rally-db-data:
+  rally-workspaces:
+
+networks:
+  rally-net:
+    name: rally-net
+    driver: bridge

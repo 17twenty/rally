@@ -1,0 +1,225 @@
+package pages
+
+import (
+	"encoding/json"
+
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/input"
+	"github.com/17twenty/rally/internal/domain"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+// ChatData holds page-level data for the chat page.
+type ChatData struct {
+	Companies        []domain.Company
+	Employees        []domain.Employee
+	DefaultCompanyID string
+}
+
+// chatEmployee is a minimal JSON-serialisable employee for the frontend.
+type chatEmployee struct {
+	ID        string `json:"id"`
+	CompanyID string `json:"company_id"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	Type      string `json:"type"`
+}
+
+func chatEmployeesJSON(employees []domain.Employee) string {
+	list := make([]chatEmployee, 0, len(employees))
+	for _, e := range employees {
+		list = append(list, chatEmployee{
+			ID:        e.ID,
+			CompanyID: e.CompanyID,
+			Name:      e.Name,
+			Role:      e.Role,
+			Type:      e.Type,
+		})
+	}
+	b, _ := json.Marshal(list)
+	return string(b)
+}
+
+templ Chat(data ChatData) {
+	@layout.Page("Chat") {
+		<!-- Static JavaScript (no Go expressions inside script tags) -->
+		<script>
+		function chatPage() {
+			const dataEl = document.getElementById('chat-data');
+			const allEmployees = dataEl ? JSON.parse(dataEl.dataset.employees) : [];
+			const defaultCompany = dataEl ? dataEl.dataset.defaultCompany : '';
+
+			return {
+				messages: [],
+				selectedAE: '',
+				companyID: defaultCompany,
+				inputText: '',
+				loading: false,
+				get aes() {
+					return allEmployees.filter(e => e.company_id === this.companyID && e.type === 'ae');
+				},
+				init() {
+					if (this.companyID) {
+						this.loadHistory();
+					}
+					this.$watch('messages', () => {
+						this.$nextTick(() => {
+							const el = document.getElementById('chat-messages');
+							if (el) el.scrollTop = el.scrollHeight;
+						});
+					});
+				},
+				onCompanyChange() {
+					this.selectedAE = '';
+					this.messages = [];
+					if (this.companyID) this.loadHistory();
+				},
+				async loadHistory() {
+					try {
+						const res = await fetch('/chat/history?company_id=' + encodeURIComponent(this.companyID));
+						if (!res.ok) return;
+						const data = await res.json();
+						if (Array.isArray(data)) {
+							this.messages = data;
+						}
+					} catch (_) {}
+				},
+				async sendMessage() {
+					const text = this.inputText.trim();
+					if (!text || this.loading) return;
+					this.messages.push({
+						sender: 'user',
+						senderName: 'You',
+						text,
+						ts: new Date().toLocaleTimeString(),
+					});
+					this.inputText = '';
+					this.loading = true;
+					try {
+						const res = await fetch('/chat/message', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({
+								company_id: this.companyID,
+								ae_id: this.selectedAE,
+								message: text,
+							}),
+						});
+						if (!res.ok) throw new Error('request failed');
+						const data = await res.json();
+						this.messages.push({
+							sender: 'ae',
+							senderName: data.sender,
+							text: data.response,
+							ts: data.ts,
+						});
+					} catch (err) {
+						this.messages.push({
+							sender: 'ae',
+							senderName: 'System',
+							text: 'Error: ' + err.message,
+							ts: new Date().toLocaleTimeString(),
+						});
+					} finally {
+						this.loading = false;
+					}
+				},
+			};
+		}
+		</script>
+
+		<!-- Server data injected via data attributes (read by chatPage() above) -->
+		<div
+			id="chat-data"
+			class="hidden"
+			data-employees={ chatEmployeesJSON(data.Employees) }
+			data-default-company={ data.DefaultCompanyID }
+		></div>
+
+		<div
+			class="flex flex-col h-[calc(100vh-8rem)]"
+			x-data="chatPage()"
+			x-init="init()"
+		>
+			<!-- Selector row -->
+			<div class="flex items-center gap-3 mb-3 flex-shrink-0">
+				if len(data.Companies) > 1 {
+					<select
+						class="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus:outline-none focus:ring-2 focus:ring-ring"
+						x-model="companyID"
+						@change="onCompanyChange()"
+					>
+						for _, c := range data.Companies {
+							<option value={ c.ID }>{ c.Name }</option>
+						}
+					</select>
+				}
+				<select
+					class="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus:outline-none focus:ring-2 focus:ring-ring"
+					x-model="selectedAE"
+				>
+					<option value="">Rally (Orchestrator)</option>
+					<template x-for="ae in aes" :key="ae.id">
+						<option :value="ae.id" x-text="ae.name || ae.role"></option>
+					</template>
+				</select>
+			</div>
+
+			<!-- Message history -->
+			@card.Card(card.Props{Class: "flex-1 overflow-hidden flex flex-col min-h-0"}) {
+				@card.Content(card.ContentProps{Class: "flex-1 overflow-y-auto p-4 min-h-0", ID: "chat-messages"}) {
+					<div class="space-y-3">
+						<template x-if="messages.length === 0 && !loading">
+							<p class="text-sm text-muted-foreground text-center py-8">Start a conversation with Rally or an AE.</p>
+						</template>
+						<template x-for="(msg, idx) in messages" :key="idx">
+							<div :class="msg.sender === 'user' ? 'flex justify-end' : 'flex justify-start'">
+								<div
+									:class="msg.sender === 'user'
+										? 'max-w-[70%] rounded-lg px-4 py-2 text-sm bg-muted'
+										: 'max-w-[70%] rounded-lg px-4 py-2 text-sm bg-card border'"
+								>
+									<template x-if="msg.sender !== 'user'">
+										<p class="text-xs font-semibold text-muted-foreground mb-1" x-text="msg.senderName"></p>
+									</template>
+									<p class="whitespace-pre-wrap break-words" x-text="msg.text"></p>
+									<p class="text-xs text-muted-foreground mt-1 text-right" x-text="msg.ts"></p>
+								</div>
+							</div>
+						</template>
+						<template x-if="loading">
+							<div class="flex justify-start">
+								<div class="rounded-lg px-4 py-2 text-sm bg-card border">
+									<p class="text-muted-foreground">Thinking…</p>
+								</div>
+							</div>
+						</template>
+					</div>
+				}
+			}
+
+			<!-- Input row -->
+			<div class="flex items-center gap-2 mt-3 flex-shrink-0">
+				@input.Input(input.Props{
+					Type:        input.TypeText,
+					Placeholder: "Type a message…",
+					Class:       "flex-1",
+					Attributes: templ.Attributes{
+						"x-model":        "inputText",
+						"@keydown.enter": "sendMessage()",
+						":disabled":      "loading",
+					},
+				})
+				@button.Button(button.Props{
+					Attributes: templ.Attributes{
+						"@click":    "sendMessage()",
+						":disabled": "loading || inputText.trim() === ''",
+					},
+				}) {
+					Send
+				}
+			</div>
+		</div>
+	}
+}

@@ -1,0 +1,107 @@
+package pages
+
+import (
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/table"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ Logs(data LogsPageData) {
+	@layout.Page("Logs") {
+		<div class="space-y-6">
+			<h1 class="text-2xl font-bold">Tool Logs</h1>
+
+			<!-- Filters -->
+			@card.Card() {
+				@card.Content() {
+					<form method="GET" action="/logs" class="flex flex-wrap items-end gap-4 pt-4">
+						<div class="space-y-1">
+							<label class="text-sm font-medium">Employee</label>
+							<select name="employee" class="border rounded-md px-3 py-1.5 text-sm bg-background">
+								<option value="">All employees</option>
+								for _, e := range data.Employees {
+									if e.ID == data.FilterEmployee {
+										<option value={ e.ID } selected>{ displayName(e.Name, e.Role) }</option>
+									} else {
+										<option value={ e.ID }>{ displayName(e.Name, e.Role) }</option>
+									}
+								}
+							</select>
+						</div>
+						<div class="space-y-1">
+							<label class="text-sm font-medium">Tool</label>
+							<input
+								type="text"
+								name="tool"
+								value={ data.FilterTool }
+								placeholder="e.g. slack"
+								class="border rounded-md px-3 py-1.5 text-sm bg-background w-32"
+							/>
+						</div>
+						@button.Button(button.Props{Type: button.TypeSubmit, Size: button.SizeSm}) {
+							Filter
+						}
+						if data.FilterEmployee != "" || data.FilterTool != "" {
+							@button.Button(button.Props{Href: "/logs", Variant: button.VariantOutline, Size: button.SizeSm}) {
+								Clear
+							}
+						}
+					</form>
+				}
+			}
+
+			<!-- Logs table -->
+			@card.Card() {
+				@card.Content() {
+					if len(data.Logs) == 0 {
+						<p class="text-sm text-muted-foreground pt-4">No logs found.</p>
+					} else {
+						@table.Table() {
+							@table.Header() {
+								@table.Row() {
+									@table.Head() { Employee }
+									@table.Head() { Tool }
+									@table.Head() { Action }
+									@table.Head() { Status }
+									@table.Head() { Trace ID }
+									@table.Head() { Task ID }
+									@table.Head() { Time }
+								}
+							}
+							@table.Body() {
+								for _, l := range data.Logs {
+									@table.Row() {
+										@table.Cell() { { l.EmployeeName } }
+										@table.Cell() { { l.Tool } }
+										@table.Cell() { { l.Action } }
+										@table.Cell() {
+											@toolSuccessBadge(l.Success)
+										}
+										@table.Cell() {
+											if l.TraceID != "" {
+												<span class="font-mono text-xs">{ l.TraceID }</span>
+											} else {
+												<span class="text-muted-foreground">—</span>
+											}
+										}
+										@table.Cell() {
+											if l.TaskID != "" {
+												<span class="font-mono text-xs">{ l.TaskID }</span>
+											} else {
+												<span class="text-muted-foreground">—</span>
+											}
+										}
+										@table.Cell() {
+											<span class="text-xs text-muted-foreground">{ l.CreatedAt.Format("Jan 2 15:04:05") }</span>
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		</div>
+	}
+}

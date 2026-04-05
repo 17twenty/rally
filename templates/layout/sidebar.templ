@@ -1,0 +1,84 @@
+package layout
+
+import (
+	"github.com/17twenty/rally/components/sidebar"
+	"github.com/17twenty/rally/components/icon"
+)
+
+templ Sidebar() {
+	@sidebar.Sidebar() {
+		@sidebar.Header() {
+			<div class="flex items-center gap-2 px-2 py-1">
+				<div class="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground font-bold text-sm">R</div>
+				<span class="font-semibold text-sidebar-foreground text-base group-data-[tui-sidebar-state=collapsed]:group-data-[tui-sidebar-collapsible=icon]:hidden">Rally</span>
+			</div>
+		}
+		@sidebar.Content() {
+			@sidebar.Group() {
+				@sidebar.Menu() {
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/", Tooltip: "Dashboard"}) {
+							@icon.LayoutDashboard(icon.Props{})
+							<span>Dashboard</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/chat", Tooltip: "Chat"}) {
+							@icon.MessageCircle(icon.Props{})
+							<span>Chat</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/companies", Tooltip: "Companies"}) {
+							@icon.Building2(icon.Props{})
+							<span>Companies</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/agents", Tooltip: "Agents"}) {
+							@icon.Bot(icon.Props{})
+							<span>Agents</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/workspace", Tooltip: "Workspace"}) {
+							@icon.Files(icon.Props{})
+							<span>Workspace</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/tasks", Tooltip: "Tasks"}) {
+							@icon.ClipboardList(icon.Props{})
+							<span>Tasks</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/kb", Tooltip: "Knowledgebase"}) {
+							@icon.BookOpen(icon.Props{})
+							<span>Knowledgebase</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/logs", Tooltip: "Logs"}) {
+							@icon.ScrollText(icon.Props{})
+							<span>Logs</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/credentials", Tooltip: "Credentials"}) {
+							@icon.KeyRound(icon.Props{})
+							<span>Credentials</span>
+						}
+					}
+					@sidebar.MenuItem() {
+						@sidebar.MenuButton(sidebar.MenuButtonProps{Href: "/setup", Tooltip: "Setup"}) {
+							@icon.Settings(icon.Props{})
+							<span>Setup</span>
+						}
+					}
+				}
+			}
+		}
+	}
+	@sidebar.Script()
+}

@@ -1,0 +1,210 @@
+package pages
+
+import (
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/separator"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ AgentDetail(data AgentDetailData) {
+	@layout.Page(displayName(data.Employee.Name, data.Employee.Role)) {
+		<div class="space-y-6" x-data="{ msgOpen: false }">
+			<!-- Header -->
+			<div class="flex items-start justify-between">
+				<div class="space-y-1">
+					<div class="flex items-center gap-2">
+						<h1 class="text-2xl font-bold">{ displayName(data.Employee.Name, data.Employee.Role) }</h1>
+						@employeeTypeBadge(data.Employee.Type)
+						@agentStatBadge(data.Employee.Status)
+					</div>
+					<p class="text-sm text-muted-foreground">{ data.Employee.Role }</p>
+				</div>
+				<div class="flex gap-2">
+					<button
+						@click="msgOpen = true"
+						class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-8 px-3"
+					>
+						Send Message
+					</button>
+					@button.Button(button.Props{Href: "/agents", Variant: button.VariantOutline, Size: button.SizeSm}) {
+						← Back
+					}
+				</div>
+			</div>
+
+			<!-- Send Message dialog -->
+			<div x-show="msgOpen" style="display:none;" class="fixed inset-0 z-50 flex items-center justify-center">
+				<div class="absolute inset-0 bg-black/50" @click="msgOpen = false"></div>
+				<div class="relative bg-background border rounded-lg shadow-lg p-6 w-full max-w-md space-y-4">
+					<h2 class="text-lg font-semibold">Send Message to { displayName(data.Employee.Name, data.Employee.Role) }</h2>
+					<form method="POST" action={ templ.SafeURL("/agents/" + data.Employee.ID + "/message") }>
+						<textarea
+							name="message"
+							rows="4"
+							class="w-full border rounded-md p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+							placeholder="Type your message..."
+						></textarea>
+						<div class="flex justify-end gap-2 mt-4">
+							<button
+								type="button"
+								@click="msgOpen = false"
+								class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium border bg-background shadow-xs hover:bg-accent h-8 px-3"
+							>
+								Cancel
+							</button>
+							@button.Button(button.Props{Size: button.SizeSm, Type: button.TypeSubmit}) {
+								Send
+							}
+						</div>
+					</form>
+				</div>
+			</div>
+
+			<!-- Current Work -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Current Work
+					}
+					@card.Description() {
+						Active backlog items and progress
+					}
+				}
+				@card.Content() {
+					if len(data.WorkItems) == 0 {
+						<p class="text-sm text-muted-foreground">No work items yet.</p>
+					} else {
+						<div class="divide-y">
+							for _, wi := range data.WorkItems {
+								<div class="flex items-center justify-between py-2">
+									<div class="flex items-center gap-3">
+										@workItemStatusIcon(wi.Status)
+										<div>
+											<span class="text-sm font-medium">{ wi.Title }</span>
+											<span class="ml-2 text-xs text-muted-foreground">{ wi.Priority }</span>
+										</div>
+									</div>
+									<span class="text-xs text-muted-foreground">{ wi.UpdatedAt.Format("Jan 2 15:04") }</span>
+								</div>
+							}
+						</div>
+					}
+				}
+			}
+
+			<!-- Soul / Identity -->
+			if data.SoulContent != "" {
+				@card.Card() {
+					@card.Header() {
+						@card.Title() {
+							Soul
+						}
+						@card.Description() {
+							Agent personality and identity
+						}
+					}
+					@card.Content() {
+						<pre class="text-sm whitespace-pre-wrap font-mono bg-muted/50 rounded-md p-4">{ data.SoulContent }</pre>
+					}
+				}
+			}
+
+			<!-- Config YAML -->
+			if data.ConfigYAML != "" {
+				@card.Card() {
+					@card.Header() {
+						@card.Title() {
+							Configuration
+						}
+					}
+					@card.Content() {
+						<pre class="text-sm font-mono bg-muted/50 rounded-md p-4 overflow-x-auto">{ data.ConfigYAML }</pre>
+					}
+				}
+			}
+
+			@separator.Separator() {}
+
+			<!-- Memory events -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Recent Memory
+					}
+					@card.Description() {
+						Episodic and reflection events
+					}
+				}
+				@card.Content() {
+					if len(data.MemoryEvents) == 0 {
+						<p class="text-sm text-muted-foreground">No memory events yet.</p>
+					} else {
+						<div class="divide-y">
+							for _, m := range data.MemoryEvents {
+								<div class="py-3 space-y-1">
+									<div class="flex items-center gap-2">
+										<span class="text-xs font-medium uppercase text-muted-foreground">{ m.Type }</span>
+										<span class="text-xs text-muted-foreground">{ m.CreatedAt.Format("Jan 2 15:04") }</span>
+									</div>
+									<p class="text-sm">{ m.Content }</p>
+								</div>
+							}
+						</div>
+					}
+				}
+			}
+
+			<!-- Recent tool logs -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Recent Tool Activity
+					}
+				}
+				@card.Content() {
+					if len(data.RecentLogs) == 0 {
+						<p class="text-sm text-muted-foreground">No tool activity yet.</p>
+					} else {
+						<div class="divide-y">
+							for _, l := range data.RecentLogs {
+								<div class="flex items-center justify-between py-2 text-sm">
+									<div class="flex items-center gap-3">
+										@toolSuccessBadge(l.Success)
+										<span>{ l.Tool }/{ l.Action }</span>
+										if l.TraceID != "" {
+											<span class="text-xs text-muted-foreground font-mono truncate max-w-[80px]">{ l.TraceID }</span>
+										}
+									</div>
+									<span class="text-xs text-muted-foreground">{ l.CreatedAt.Format("Jan 2 15:04:05") }</span>
+								</div>
+							}
+						</div>
+					}
+				}
+			}
+		</div>
+	}
+}
+
+func displayName(name, role string) string {
+	if name != "" {
+		return name
+	}
+	return role
+}
+
+templ workItemStatusIcon(status string) {
+	switch status {
+		case "in_progress":
+			<span class="inline-flex h-2 w-2 rounded-full bg-blue-500" title="In Progress"></span>
+		case "todo":
+			<span class="inline-flex h-2 w-2 rounded-full bg-gray-400" title="Todo"></span>
+		case "done":
+			<span class="inline-flex h-2 w-2 rounded-full bg-green-500" title="Done"></span>
+		case "blocked":
+			<span class="inline-flex h-2 w-2 rounded-full bg-red-500" title="Blocked"></span>
+		default:
+			<span class="inline-flex h-2 w-2 rounded-full bg-gray-300" title={ status }></span>
+	}
+}

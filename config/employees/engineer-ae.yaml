@@ -1,0 +1,22 @@
+employee:
+  id: engineer-ae
+  role: Engineer
+  reports_to: cto-ae
+
+identity:
+  soul_file: soul.md
+
+cognition:
+  default_model_ref: greenthread-gpt-oss-120b
+  routing:
+    planning: greenthread-gpt-oss-120b
+    execution: greenthread-gpt-oss-120b
+
+runtime:
+  heartbeat_seconds: 600
+
+tools:
+  slack: true
+  github: true
+  shell: true
+  browser: false

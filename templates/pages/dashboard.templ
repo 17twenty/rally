@@ -1,0 +1,207 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/17twenty/rally/components/badge"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ Dashboard(data DashboardData) {
+	@layout.Page("Dashboard") {
+		<div class="space-y-6">
+			<!-- Quick stats -->
+			<div class="grid grid-cols-3 gap-4">
+				@card.Card() {
+					@card.Content() {
+						<div class="space-y-1 pt-4">
+							<p class="text-sm text-muted-foreground">AI Employees</p>
+							<p class="text-3xl font-bold">{ fmt.Sprintf("%d", data.TotalAEs) }</p>
+						</div>
+					}
+				}
+				@card.Card() {
+					@card.Content() {
+						<div class="space-y-1 pt-4">
+							<p class="text-sm text-muted-foreground">Total Tasks</p>
+							<p class="text-3xl font-bold">{ fmt.Sprintf("%d", data.TotalTasks) }</p>
+						</div>
+					}
+				}
+				@card.Card() {
+					@card.Content() {
+						<div class="space-y-1 pt-4">
+							<p class="text-sm text-muted-foreground">KB Entries</p>
+							<p class="text-3xl font-bold">{ fmt.Sprintf("%d", data.TotalKBEntries) }</p>
+						</div>
+					}
+				}
+			</div>
+			<!-- Agent cards grid -->
+			if len(data.AgentCards) > 0 {
+				@card.Card() {
+					@card.Header() {
+						@card.Title() {
+							AI Employees
+						}
+						@card.Description() {
+							{ fmt.Sprintf("%d agent(s) running", data.TotalAEs) }
+						}
+					}
+					@card.Content() {
+						<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+							for _, ac := range data.AgentCards {
+								@dashboardAgentCard(ac)
+							}
+						</div>
+					}
+				}
+			}
+			<!-- Team Activity: what AEs are working on -->
+			if len(data.TeamWork) > 0 {
+				@card.Card() {
+					@card.Header() {
+						@card.Title() {
+							Team Activity
+						}
+						@card.Description() {
+							What your AEs are working on right now
+						}
+					}
+					@card.Content() {
+						<div class="overflow-x-auto">
+							<table class="w-full text-sm">
+								<thead>
+									<tr class="border-b text-left">
+										<th class="pb-2 font-medium text-muted-foreground">Agent</th>
+										<th class="pb-2 font-medium text-muted-foreground">Working On</th>
+										<th class="pb-2 font-medium text-muted-foreground">Status</th>
+										<th class="pb-2 font-medium text-muted-foreground text-right">Updated</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y">
+									for _, tw := range data.TeamWork {
+										<tr>
+											<td class="py-2 font-medium">{ tw.OwnerName }</td>
+											<td class="py-2">{ tw.Title }</td>
+											<td class="py-2">
+												@workStatusBadge(tw.Status)
+											</td>
+											<td class="py-2 text-right text-xs text-muted-foreground">{ tw.UpdatedAt.Format("Jan 2 15:04") }</td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						</div>
+					}
+				}
+			}
+			<!-- Recent activity feed -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Recent Activity
+					}
+					@card.Description() {
+						Last 20 tool executions
+					}
+				}
+				@card.Content() {
+					if len(data.RecentLogs) == 0 {
+						<p class="text-sm text-muted-foreground">No activity yet.</p>
+					} else {
+						<div class="divide-y">
+							for _, l := range data.RecentLogs {
+								<div class="flex items-center justify-between py-2 text-sm">
+									<div class="flex items-center gap-3">
+										@toolSuccessBadge(l.Success)
+										<span class="font-medium">{ l.EmployeeName }</span>
+										<span class="text-muted-foreground">{ l.Tool }/{ l.Action }</span>
+									</div>
+									<span class="text-xs text-muted-foreground">{ l.CreatedAt.Format("Jan 2 15:04:05") }</span>
+								</div>
+							}
+						</div>
+					}
+				}
+			}
+		</div>
+	}
+}
+
+templ dashboardAgentCard(ac AgentCard) {
+	<div class="border rounded-lg p-4 space-y-2">
+		<div class="flex items-center justify-between">
+			<span class="font-medium text-sm">
+				if ac.Employee.Name != "" {
+					{ ac.Employee.Name }
+				} else {
+					{ ac.Employee.Role }
+				}
+			</span>
+			@agentStatBadge(ac.Employee.Status)
+		</div>
+		<p class="text-xs text-muted-foreground">{ ac.Employee.Role }</p>
+		if !ac.LastActive.IsZero() {
+			<p class="text-xs text-muted-foreground">Last active: { ac.LastActive.Format("Jan 2 15:04") }</p>
+		} else {
+			<p class="text-xs text-muted-foreground">No activity yet</p>
+		}
+		<a href={ templ.SafeURL("/agents/" + ac.Employee.ID) } class="text-xs text-primary hover:underline">View →</a>
+	</div>
+}
+
+templ agentStatBadge(status string) {
+	switch status {
+	case "active":
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			active
+		}
+	case "error":
+		@badge.Badge(badge.Props{Variant: badge.VariantDestructive}) {
+			error
+		}
+	default:
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			{ status }
+		}
+	}
+}
+
+templ workStatusBadge(status string) {
+	switch status {
+	case "in_progress":
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			in progress
+		}
+	case "blocked":
+		@badge.Badge(badge.Props{Variant: badge.VariantDestructive}) {
+			blocked
+		}
+	case "todo":
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			todo
+		}
+	case "done":
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			done
+		}
+	default:
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			{ status }
+		}
+	}
+}
+
+templ toolSuccessBadge(success bool) {
+	if success {
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			ok
+		}
+	} else {
+		@badge.Badge(badge.Props{Variant: badge.VariantDestructive}) {
+			fail
+		}
+	}
+}

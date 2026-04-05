@@ -1,0 +1,164 @@
+package pages
+
+import (
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/form"
+	"github.com/17twenty/rally/components/input"
+	"github.com/17twenty/rally/components/textarea"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ CompanyNew() {
+	@layout.Page("New Company") {
+		<div
+			class="max-w-2xl mx-auto"
+			x-data="{ step: 1, employees: [{name:'',role:'',specialties:''}] }"
+		>
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Create Your Company
+					}
+					@card.Description() {
+						Set up your company and team in Rally
+					}
+				}
+				@card.Content() {
+					<form method="POST" action="/companies" class="space-y-6">
+						<!-- Step indicator -->
+						<div class="flex items-center gap-2 text-sm text-muted-foreground">
+							<span
+								class="flex items-center gap-1"
+								:class="step >= 1 ? 'text-foreground font-medium' : ''"
+							>
+								<span
+									class="flex h-5 w-5 items-center justify-center rounded-full text-xs"
+									:class="step >= 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'"
+								>1</span>
+								Company
+							</span>
+							<span class="flex-1 border-t"></span>
+							<span
+								class="flex items-center gap-1"
+								:class="step >= 2 ? 'text-foreground font-medium' : ''"
+							>
+								<span
+									class="flex h-5 w-5 items-center justify-center rounded-full text-xs"
+									:class="step >= 2 ? 'bg-primary text-primary-foreground' : 'bg-muted'"
+								>2</span>
+								Team
+							</span>
+						</div>
+						<!-- Step 1: Company info -->
+						<div x-show="step === 1" class="space-y-4">
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "name"}) {
+									Company Name <span class="text-destructive">*</span>
+								}
+								@input.Input(input.Props{
+									ID:          "name",
+									Name:        "name",
+									Placeholder: "Acme Corp",
+									Required:    true,
+								})
+							}
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "mission"}) {
+									Mission Statement
+								}
+								@textarea.Textarea(textarea.Props{
+									ID:          "mission",
+									Name:        "mission",
+									Placeholder: "We exist to...",
+									Rows:        3,
+								})
+							}
+							<div class="flex justify-end">
+								@button.Button(button.Props{
+									Type: button.TypeButton,
+									Attributes: templ.Attributes{
+										"@click": "step = 2",
+									},
+								}) {
+									Next: Add Team →
+								}
+							</div>
+						</div>
+						<!-- Step 2: Human employees -->
+						<div x-show="step === 2" class="space-y-4">
+							<div class="space-y-3">
+								<template x-for="(emp, idx) in employees" :key="idx">
+									<div class="flex gap-2 items-start p-3 border rounded-md">
+										<div class="flex-1 grid grid-cols-3 gap-2">
+											<div class="space-y-1">
+												<label class="text-sm font-medium">Name</label>
+												<input
+													name="emp_name"
+													x-model="emp.name"
+													placeholder="Jane Smith"
+													class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+												/>
+											</div>
+											<div class="space-y-1">
+												<label class="text-sm font-medium">Role</label>
+												<input
+													name="emp_role"
+													x-model="emp.role"
+													placeholder="Head of Sales"
+													class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+												/>
+											</div>
+											<div class="space-y-1">
+												<label class="text-sm font-medium">Specialties</label>
+												<input
+													name="emp_specialties"
+													x-model="emp.specialties"
+													placeholder="enterprise, SaaS"
+													class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+												/>
+											</div>
+										</div>
+										<button
+											type="button"
+											class="mt-6 text-muted-foreground hover:text-destructive"
+											x-show="employees.length > 1"
+											@click="employees.splice(idx, 1)"
+										>
+											✕
+										</button>
+									</div>
+								</template>
+							</div>
+							@button.Button(button.Props{
+								Variant: button.VariantOutline,
+								Type:    button.TypeButton,
+								Attributes: templ.Attributes{
+									"@click": "employees.push({name:'',role:'',specialties:''})",
+								},
+							}) {
+								+ Add Employee
+							}
+							<div class="flex justify-between pt-2">
+								@button.Button(button.Props{
+									Variant: button.VariantGhost,
+									Type:    button.TypeButton,
+									Attributes: templ.Attributes{
+										"@click": "step = 1",
+									},
+								}) {
+									← Back
+								}
+								@button.Button(button.Props{
+									Type: button.TypeSubmit,
+								}) {
+									Build my team
+								}
+							</div>
+						</div>
+					</form>
+				}
+			}
+		</div>
+	}
+}

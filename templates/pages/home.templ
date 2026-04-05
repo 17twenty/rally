@@ -1,0 +1,46 @@
+package pages
+
+import (
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ Home(noCompanies bool) {
+	@layout.Page("Dashboard") {
+		<div class="flex flex-col items-center justify-center min-h-[60vh] text-center gap-6">
+			<div class="space-y-2">
+				<h1 class="text-4xl font-bold tracking-tight">Rally</h1>
+				<p class="text-xl text-muted-foreground">an operating system for organizations</p>
+			</div>
+			if noCompanies {
+				<div class="w-full max-w-md">
+					@card.Card() {
+						@card.Header() {
+							@card.Title() {
+								Set up Rally for Rally
+							}
+							@card.Description() {
+								Bootstrap Rally as its own first customer — hire AEs and put them to work on the product itself.
+							}
+						}
+						@card.Content() {
+							<div class="flex flex-col gap-3">
+								@button.Button(button.Props{Href: "/setup", Size: button.SizeLg}) {
+									Set up Rally for Rally →
+								}
+								@button.Button(button.Props{Href: "/companies/new", Variant: button.VariantOutline}) {
+									Or create a different company
+								}
+							</div>
+						}
+					}
+				</div>
+			} else {
+				@button.Button(button.Props{Href: "/companies/new", Size: button.SizeLg}) {
+					Create Company
+				}
+			}
+		</div>
+	}
+}

@@ -1,0 +1,9 @@
+node_modules/
+.git/
+static/css/tailwind.css
+*.exe
+*.test
+*.out
+.env
+.env.*
+!.env.example

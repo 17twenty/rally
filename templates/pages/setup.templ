@@ -1,0 +1,222 @@
+package pages
+
+import (
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/form"
+	"github.com/17twenty/rally/components/input"
+	"github.com/17twenty/rally/components/textarea"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ Setup() {
+	@layout.Page("Set up Rally for Rally") {
+		<div
+			class="max-w-2xl mx-auto"
+			x-data="{ step: 1 }"
+		>
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Set up Rally for Rally
+					}
+					@card.Description() {
+						Bootstrap Rally as its own first customer. Rally will create a company for itself, hire AEs, and have them start working on the product.
+					}
+				}
+				@card.Content() {
+					<form method="POST" action="/setup" class="space-y-6">
+						<!-- Step indicator -->
+						<div class="flex items-center gap-2 text-sm text-muted-foreground">
+							<span
+								class="flex items-center gap-1"
+								:class="step >= 1 ? 'text-foreground font-medium' : ''"
+							>
+								<span
+									class="flex h-5 w-5 items-center justify-center rounded-full text-xs"
+									:class="step >= 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'"
+								>1</span>
+								Company
+							</span>
+							<span class="flex-1 border-t"></span>
+							<span
+								class="flex items-center gap-1"
+								:class="step >= 2 ? 'text-foreground font-medium' : ''"
+							>
+								<span
+									class="flex h-5 w-5 items-center justify-center rounded-full text-xs"
+									:class="step >= 2 ? 'bg-primary text-primary-foreground' : 'bg-muted'"
+								>2</span>
+								Repository
+							</span>
+							<span class="flex-1 border-t"></span>
+							<span
+								class="flex items-center gap-1"
+								:class="step >= 3 ? 'text-foreground font-medium' : ''"
+							>
+								<span
+									class="flex h-5 w-5 items-center justify-center rounded-full text-xs"
+									:class="step >= 3 ? 'bg-primary text-primary-foreground' : 'bg-muted'"
+								>3</span>
+								Review
+							</span>
+						</div>
+						<!-- Step 1: Company details -->
+						<div x-show="step === 1" class="space-y-4">
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "company_name"}) {
+									Company Name
+								}
+								@input.Input(input.Props{
+									ID:    "company_name",
+									Name:  "company_name",
+									Value: "Rally",
+								})
+							}
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "mission"}) {
+									Mission
+								}
+								@textarea.Textarea(textarea.Props{
+									ID:    "mission",
+									Name:  "mission",
+									Value: "Build and operate an AI-powered organization OS. We eat our own dogfood — Rally runs Rally.",
+									Rows:  3,
+								})
+							}
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "founder_name"}) {
+									Your Name
+								}
+								@input.Input(input.Props{
+									ID:          "founder_name",
+									Name:        "founder_name",
+									Placeholder: "Jane Smith",
+									Required:    true,
+								})
+							}
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "founder_role"}) {
+									Your Role
+								}
+								@input.Input(input.Props{
+									ID:    "founder_role",
+									Name:  "founder_role",
+									Value: "Founder",
+								})
+							}
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "founder_slack_id"}) {
+									Your Slack User ID (optional)
+								}
+								@input.Input(input.Props{
+									ID:          "founder_slack_id",
+									Name:        "founder_slack_id",
+									Placeholder: "U0123456789",
+								})
+								@form.Description() {
+									Used by AEs to send you direct messages in Slack.
+								}
+							}
+							<div class="flex justify-end">
+								@button.Button(button.Props{
+									Type: button.TypeButton,
+									Attributes: templ.Attributes{
+										"@click": "step = 2",
+									},
+								}) {
+									Next: Repository →
+								}
+							</div>
+						</div>
+						<!-- Step 2: Repository config -->
+						<div x-show="step === 2" class="space-y-4">
+							<p class="text-sm text-muted-foreground">Optional but recommended. Connect your codebase so Developer-AE can read and contribute.</p>
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "github_repo"}) {
+									GitHub Repo URL
+								}
+								@input.Input(input.Props{
+									ID:          "github_repo",
+									Name:        "github_repo",
+									Placeholder: "https://github.com/yourorg/rally",
+									Type:        input.TypeURL,
+								})
+							}
+							@form.Item() {
+								@form.Label(form.LabelProps{For: "github_token"}) {
+									GitHub Token
+								}
+								@input.Input(input.Props{
+									ID:          "github_token",
+									Name:        "github_token",
+									Placeholder: "ghp_...",
+									Type:        input.TypePassword,
+								})
+								@form.Description() {
+									This lets your Developer-AE read and contribute to the codebase. Stored as a credential for Developer-AE.
+								}
+							}
+							<div class="flex justify-between">
+								@button.Button(button.Props{
+									Variant: button.VariantGhost,
+									Type:    button.TypeButton,
+									Attributes: templ.Attributes{
+										"@click": "step = 1",
+									},
+								}) {
+									← Back
+								}
+								@button.Button(button.Props{
+									Type: button.TypeButton,
+									Attributes: templ.Attributes{
+										"@click": "step = 3",
+									},
+								}) {
+									Next: Review →
+								}
+							</div>
+						</div>
+						<!-- Step 3: Review and confirm -->
+						<div x-show="step === 3" class="space-y-4">
+							<div class="rounded-md border p-4 space-y-3">
+								<p class="font-medium text-sm">What will happen:</p>
+								<ul class="text-sm text-muted-foreground space-y-2 list-disc list-inside">
+									<li>Create the Rally company in the database</li>
+									<li>Hire 7 AI Employees: CEO-AE, CTO-AE, Product Manager-AE, Engineer-AE, Developer-AE, SDR-AE, CMO-AE, Designer-AE</li>
+									<li>AEs begin reviewing the codebase and PRD</li>
+									<li>Connect GitHub repo for Developer-AE (if token provided)</li>
+									<li>Add Rally codebase to the knowledge base</li>
+								</ul>
+								<div class="mt-4 p-3 rounded-md bg-muted/50 text-sm">
+									<p class="font-medium">Slack Integration</p>
+									<p class="text-muted-foreground mt-1">
+										After setup, connect your Slack workspace so AEs can communicate with your team.
+										Visit <a href="/slack/install" class="text-primary underline">/slack/install</a> to add Rally to Slack.
+									</p>
+								</div>
+							</div>
+							<div class="flex justify-between">
+								@button.Button(button.Props{
+									Variant: button.VariantGhost,
+									Type:    button.TypeButton,
+									Attributes: templ.Attributes{
+										"@click": "step = 2",
+									},
+								}) {
+									← Back
+								}
+								@button.Button(button.Props{
+									Type: button.TypeSubmit,
+									Size: button.SizeLg,
+								}) {
+									Build the team
+								}
+							</div>
+						</div>
+					</form>
+				}
+			}
+		</div>
+	}
+}

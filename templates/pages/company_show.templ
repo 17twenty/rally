@@ -1,0 +1,586 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/17twenty/rally/components/badge"
+	"github.com/17twenty/rally/components/button"
+	"github.com/17twenty/rally/components/card"
+	"github.com/17twenty/rally/components/dialog"
+	"github.com/17twenty/rally/components/input"
+	"github.com/17twenty/rally/components/label"
+	"github.com/17twenty/rally/components/textarea"
+	"github.com/17twenty/rally/internal/domain"
+	"github.com/17twenty/rally/templates/layout"
+)
+
+templ CompanyShow(company domain.Company, employees []domain.Employee, flashMsg string, policyDoc string, financials *domain.CompanyFinancials) {
+	@layout.Page(company.Name) {
+		<script>
+			function companyPoller() {
+				return {
+					status: 'building',
+					progress: '0/4',
+					init() {
+						const id = this.$el.dataset.companyId;
+						this.status = this.$el.dataset.status;
+						const poll = async () => {
+							try {
+								const r = await fetch('/companies/' + id + '/status');
+								const d = await r.json();
+								this.status = d.status;
+								this.progress = d.progress;
+							} catch(_) {}
+						};
+						poll();
+						setInterval(poll, 5000);
+					}
+				};
+			}
+		</script>
+		<div
+			class="space-y-6"
+			x-data="companyPoller()"
+			data-company-id={ company.ID }
+			data-status={ company.Status }
+		>
+			<!-- Flash message -->
+			if flashMsg != "" {
+				<div class="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+					{ flashMsg }
+				</div>
+			}
+			<!-- Header -->
+			<div class="flex items-start justify-between">
+				<div class="space-y-1">
+					<div class="flex items-center gap-3">
+						<h1 class="text-2xl font-bold">{ company.Name }</h1>
+						@statusBadge(company.Status)
+					</div>
+					if company.Mission != "" {
+						<p class="text-muted-foreground max-w-prose">{ company.Mission }</p>
+					}
+				</div>
+				<div class="flex items-center gap-2">
+					if company.Status == "pending" {
+						<form method="POST" action={ templ.SafeURL("/companies/" + company.ID + "/build") }>
+							@button.Button(button.Props{Type: button.TypeSubmit}) {
+								Build my team
+							}
+						</form>
+					}
+					@button.Button(button.Props{Href: "/companies", Variant: button.VariantOutline, Size: button.SizeSm}) {
+						← All Companies
+					}
+				</div>
+			</div>
+			<!-- Building status banner -->
+			<div x-show="status === 'building'" class="rounded-md bg-amber-50 border border-amber-200 px-4 py-3">
+				<div class="flex items-center gap-3">
+					<div class="animate-spin rounded-full h-4 w-4 border-b-2 border-amber-600"></div>
+					<div class="text-sm text-amber-800">
+						<span class="font-medium">Building your team...</span>
+						<span class="ml-2 text-amber-600" x-text="progress"></span>
+					</div>
+				</div>
+			</div>
+			<!-- Org chart -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Org Chart
+					}
+				}
+				@card.Content() {
+					if len(orgChartAEs(employees)) == 0 {
+						<div class="flex items-center justify-center h-32 border-2 border-dashed rounded-md text-muted-foreground">
+							Org chart will appear once team is built
+						</div>
+					} else {
+						@orgChartTree(employees)
+					}
+				}
+			}
+			<!-- Company Policy -->
+			@dialog.Dialog(dialog.Props{ID: "policy-dialog"}) {
+				@card.Card() {
+					@card.Header() {
+						<div class="flex items-center justify-between">
+							@card.Title() {
+								Company Policy
+							}
+							@dialog.Trigger() {
+								@button.Button(button.Props{Variant: button.VariantOutline, Size: button.SizeSm}) {
+									Set Policy
+								}
+							}
+						</div>
+					}
+					@card.Content() {
+						if policyDoc == "" {
+							<p class="text-sm text-muted-foreground">No policy set.</p>
+						} else {
+							<pre class="text-sm whitespace-pre-wrap font-mono bg-muted rounded-md p-3 overflow-auto max-h-64"><code>{ policyDoc }</code></pre>
+						}
+					}
+				}
+				@dialog.Content() {
+					@dialog.Header() {
+						@dialog.Title() {
+							Set Company Policy
+						}
+						@dialog.Description() {
+							Define the dos and don&#39;ts for all AI agents in this company.
+						}
+					}
+					<form method="POST" action={ templ.SafeURL("/companies/" + company.ID + "/policy") }>
+						@textarea.Textarea(textarea.Props{
+							Name:        "policy",
+							Value:       policyDoc,
+							Rows:        12,
+							Placeholder: "## Do\n- Be helpful\n\n## Don't\n- Share confidential data",
+						})
+						<div class="flex justify-end gap-2 mt-4">
+							@dialog.Close() {
+								@button.Button(button.Props{Variant: button.VariantOutline, Type: button.TypeButton}) {
+									Cancel
+								}
+							}
+							@button.Button(button.Props{Type: button.TypeSubmit}) {
+								Save Policy
+							}
+						</div>
+					</form>
+				}
+			}
+			<!-- Financial Settings -->
+			@card.Card() {
+				@card.Header() {
+					<div class="flex items-center justify-between">
+						@card.Title() {
+							Financial Settings
+						}
+						<div class="flex items-center gap-2">
+							@dialog.Dialog(dialog.Props{ID: "financials-dialog"}) {
+								@dialog.Trigger() {
+									@button.Button(button.Props{Variant: button.VariantOutline, Size: button.SizeSm}) {
+										Configure Financials
+									}
+								}
+								@dialog.Content() {
+									@dialog.Header() {
+										@dialog.Title() {
+											Configure Financial Settings
+										}
+										@dialog.Description() {
+											Set bank details and invoice configuration for this company.
+										}
+									}
+									<form method="POST" action={ templ.SafeURL("/companies/" + company.ID + "/financials") }>
+										<div class="space-y-3">
+											<div>
+												@label.Label(label.Props{For: "fin-bank"}) {
+													Bank Name
+												}
+												@input.Input(input.Props{ID: "fin-bank", Name: "bank_name", Placeholder: "Commonwealth Bank", Value: financialVal(financials, "bank_name")})
+											</div>
+											<div>
+												@label.Label(label.Props{For: "fin-acct-name"}) {
+													Account Name
+												}
+												@input.Input(input.Props{ID: "fin-acct-name", Name: "account_name", Placeholder: "Acme Pty Ltd", Value: financialVal(financials, "account_name")})
+											</div>
+											<div class="grid grid-cols-2 gap-3">
+												<div>
+													@label.Label(label.Props{For: "fin-bsb"}) {
+														BSB
+													}
+													@input.Input(input.Props{ID: "fin-bsb", Name: "bsb", Placeholder: "062-000", Value: financialVal(financials, "bsb")})
+												</div>
+												<div>
+													@label.Label(label.Props{For: "fin-acct-num"}) {
+														Account Number
+													}
+													@input.Input(input.Props{ID: "fin-acct-num", Name: "account_number", Placeholder: "12345678", Value: financialVal(financials, "account_number")})
+												</div>
+											</div>
+											<div>
+												@label.Label(label.Props{For: "fin-swift"}) {
+													SWIFT Code
+												}
+												@input.Input(input.Props{ID: "fin-swift", Name: "swift_code", Placeholder: "CTBAAU2S", Value: financialVal(financials, "swift_code")})
+											</div>
+											<div>
+												@label.Label(label.Props{For: "fin-provider"}) {
+													Payment Provider
+												}
+												<select id="fin-provider" name="payment_provider" class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]">
+													<option value="">None</option>
+													<option value="stripe" selected?={ financialVal(financials, "payment_provider") == "stripe" }>Stripe</option>
+													<option value="airwallex" selected?={ financialVal(financials, "payment_provider") == "airwallex" }>Airwallex</option>
+													<option value="bank_transfer" selected?={ financialVal(financials, "payment_provider") == "bank_transfer" }>Bank Transfer</option>
+													<option value="other" selected?={ financialVal(financials, "payment_provider") == "other" }>Other</option>
+												</select>
+											</div>
+											<div class="grid grid-cols-2 gap-3">
+												<div>
+													@label.Label(label.Props{For: "fin-prefix"}) {
+														Invoice Prefix
+													}
+													@input.Input(input.Props{ID: "fin-prefix", Name: "invoice_prefix", Placeholder: "INV", Value: financialPrefixVal(financials)})
+												</div>
+												<div>
+													@label.Label(label.Props{For: "fin-currency"}) {
+														Currency
+													}
+													<select id="fin-currency" name="currency" class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]">
+														<option value="AUD" selected?={ financialCurrencyVal(financials) == "AUD" }>AUD</option>
+														<option value="USD" selected?={ financialCurrencyVal(financials) == "USD" }>USD</option>
+														<option value="EUR" selected?={ financialCurrencyVal(financials) == "EUR" }>EUR</option>
+														<option value="GBP" selected?={ financialCurrencyVal(financials) == "GBP" }>GBP</option>
+														<option value="SGD" selected?={ financialCurrencyVal(financials) == "SGD" }>SGD</option>
+														<option value="NZD" selected?={ financialCurrencyVal(financials) == "NZD" }>NZD</option>
+													</select>
+												</div>
+											</div>
+										</div>
+										<div class="flex justify-end gap-2 mt-4">
+											@dialog.Close() {
+												@button.Button(button.Props{Variant: button.VariantOutline, Type: button.TypeButton}) {
+													Cancel
+												}
+											}
+											@button.Button(button.Props{Type: button.TypeSubmit}) {
+												Save Settings
+											}
+										</div>
+									</form>
+								}
+							}
+							@dialog.Dialog(dialog.Props{ID: "invoice-dialog"}) {
+								@dialog.Trigger() {
+									@button.Button(button.Props{Variant: button.VariantOutline, Size: button.SizeSm}) {
+										Generate Invoice
+									}
+								}
+								@dialog.Content() {
+									@dialog.Header() {
+										@dialog.Title() {
+											Generate Invoice
+										}
+										@dialog.Description() {
+											Create and send an invoice to a client.
+										}
+									}
+									<form method="POST" action={ templ.SafeURL("/companies/" + company.ID + "/invoice") }>
+										<div class="space-y-3">
+											<div>
+												@label.Label(label.Props{For: "inv-issued-to"}) {
+													Issued To
+												}
+												@input.Input(input.Props{ID: "inv-issued-to", Name: "issued_to", Placeholder: "Acme Corp"})
+											</div>
+											<div>
+												@label.Label(label.Props{For: "inv-email"}) {
+													Client Email
+												}
+												@input.Input(input.Props{ID: "inv-email", Name: "issued_to_email", Type: input.TypeEmail, Placeholder: "billing@acme.com"})
+											</div>
+											<div>
+												@label.Label(label.Props{For: "inv-desc"}) {
+													Description
+												}
+												@input.Input(input.Props{ID: "inv-desc", Name: "description", Placeholder: "Consulting services"})
+											</div>
+											<div class="grid grid-cols-2 gap-3">
+												<div>
+													@label.Label(label.Props{For: "inv-qty"}) {
+														Quantity
+													}
+													@input.Input(input.Props{ID: "inv-qty", Name: "quantity", Type: input.TypeNumber, Value: "1"})
+												</div>
+												<div>
+													@label.Label(label.Props{For: "inv-price"}) {
+														Unit Price
+													}
+													@input.Input(input.Props{ID: "inv-price", Name: "unit_price", Type: input.TypeNumber, Placeholder: "0.00"})
+												</div>
+											</div>
+											<div>
+												@label.Label(label.Props{For: "inv-due"}) {
+													Due In (days)
+												}
+												@input.Input(input.Props{ID: "inv-due", Name: "due_days", Type: input.TypeNumber, Value: "30"})
+											</div>
+											<div>
+												@label.Label(label.Props{For: "inv-notes"}) {
+													Notes
+												}
+												@textarea.Textarea(textarea.Props{Name: "notes", Placeholder: "Payment terms, references...", Rows: 3})
+											</div>
+										</div>
+										<div class="flex justify-end gap-2 mt-4">
+											@dialog.Close() {
+												@button.Button(button.Props{Variant: button.VariantOutline, Type: button.TypeButton}) {
+													Cancel
+												}
+											}
+											@button.Button(button.Props{Type: button.TypeSubmit}) {
+												Send Invoice
+											}
+										</div>
+									</form>
+								}
+							}
+						</div>
+					</div>
+				}
+				@card.Content() {
+					if financials == nil || financials.ID == "" {
+						<p class="text-sm text-muted-foreground">Not configured.</p>
+					} else {
+						<div class="space-y-1 text-sm">
+							if financials.BankName != "" {
+								<div><span class="font-medium">Bank:</span> { financials.BankName }</div>
+							}
+							if financials.AccountName != "" {
+								<div><span class="font-medium">Account Name:</span> { financials.AccountName }</div>
+							}
+							if financials.BSB != "" {
+								<div><span class="font-medium">BSB:</span> { financials.BSB }</div>
+							}
+							if financials.AccountNumber != "" {
+								<div><span class="font-medium">Account #:</span> { maskAccount(financials.AccountNumber) }</div>
+							}
+							if financials.PaymentProvider != "" {
+								<div><span class="font-medium">Payment Provider:</span> { financials.PaymentProvider }</div>
+							}
+							<div><span class="font-medium">Invoice Prefix:</span> { financials.InvoicePrefix }</div>
+							<div><span class="font-medium">Currency:</span> { financials.InvoiceCurrency }</div>
+						</div>
+					}
+				}
+			}
+			<!-- Employees -->
+			@card.Card() {
+				@card.Header() {
+					@card.Title() {
+						Team Members
+					}
+					@card.Description() {
+						{ employeeCount(employees) }
+					}
+				}
+				@card.Content() {
+					if len(employees) == 0 {
+						<p class="text-sm text-muted-foreground">No employees yet.</p>
+					} else {
+						<div class="divide-y">
+							for _, emp := range employees {
+								<div class="flex items-center justify-between py-3">
+									<div class="space-y-0.5">
+										<div class="flex items-center gap-2">
+											<span class="font-medium">
+												if emp.Name != "" {
+													{ emp.Name }
+												} else {
+													{ emp.Role }
+												}
+											</span>
+											@employeeTypeBadge(emp.Type)
+										</div>
+										<p class="text-sm text-muted-foreground">{ emp.Role }</p>
+										if emp.Specialties != "" {
+											<p class="text-xs text-muted-foreground">{ emp.Specialties }</p>
+										}
+									</div>
+									@statusBadge(emp.Status)
+								</div>
+							}
+						</div>
+					}
+				}
+			}
+		</div>
+	}
+}
+
+// orgChartAEs returns only AE employees.
+func orgChartAEs(employees []domain.Employee) []domain.Employee {
+	var aes []domain.Employee
+	for _, e := range employees {
+		if e.Type == "ae" {
+			aes = append(aes, e)
+		}
+	}
+	return aes
+}
+
+// roleLevel returns a sort order for known AE roles (lower = higher in hierarchy).
+func roleLevel(role string) int {
+	switch role {
+	case "CEO":
+		return 0
+	case "CTO":
+		return 1
+	case "Product Manager":
+		return 1
+	case "Software Engineer":
+		return 2
+	default:
+		return 3
+	}
+}
+
+templ orgChartTree(employees []domain.Employee) {
+	<div class="flex flex-col items-center gap-6 py-4">
+		<!-- CEO level -->
+		<div class="flex gap-4 justify-center">
+			for _, emp := range employees {
+				if emp.Type == "ae" && roleLevel(emp.Role) == 0 {
+					@orgCard(emp)
+				}
+			}
+		</div>
+		<!-- Mid level (CTO, PM) -->
+		<div class="flex gap-4 justify-center">
+			for _, emp := range employees {
+				if emp.Type == "ae" && roleLevel(emp.Role) == 1 {
+					@orgCard(emp)
+				}
+			}
+		</div>
+		<!-- IC level (Engineer, etc.) -->
+		<div class="flex gap-4 justify-center">
+			for _, emp := range employees {
+				if emp.Type == "ae" && roleLevel(emp.Role) == 2 {
+					@orgCard(emp)
+				}
+			}
+		</div>
+		<!-- Human employees -->
+		if hasHumans(employees) {
+			<div class="w-full border-t pt-4">
+				<p class="text-xs text-center text-muted-foreground mb-3">Human Team</p>
+				<div class="flex gap-4 justify-center flex-wrap">
+					for _, emp := range employees {
+						if emp.Type == "human" {
+							@orgCard(emp)
+						}
+					}
+				</div>
+			</div>
+		}
+	</div>
+}
+
+templ orgCard(emp domain.Employee) {
+	<div class="rounded-lg border bg-card p-3 text-center min-w-[120px] shadow-sm">
+		<div class="flex justify-center mb-1">
+			@employeeTypeBadge(emp.Type)
+		</div>
+		<p class="text-sm font-medium">
+			if emp.Name != "" {
+				{ emp.Name }
+			} else {
+				{ emp.Role }
+			}
+		</p>
+		<p class="text-xs text-muted-foreground">{ emp.Role }</p>
+	</div>
+}
+
+func hasHumans(employees []domain.Employee) bool {
+	for _, e := range employees {
+		if e.Type == "human" {
+			return true
+		}
+	}
+	return false
+}
+
+templ statusBadge(status string) {
+	switch status {
+	case "active":
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			{ status }
+		}
+	case "pending":
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			{ status }
+		}
+	default:
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			{ status }
+		}
+	}
+}
+
+templ employeeTypeBadge(empType string) {
+	if empType == "ae" {
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			AE
+		}
+	} else {
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			Human
+		}
+	}
+}
+
+func employeeCount(employees []domain.Employee) string {
+	total := len(employees)
+	if total == 0 {
+		return "No team members"
+	}
+	if total == 1 {
+		return "1 team member"
+	}
+	return fmt.Sprintf("%d team members", total)
+}
+
+// maskAccount masks all but the last 4 digits of an account number.
+func maskAccount(acct string) string {
+	if len(acct) <= 4 {
+		return acct
+	}
+	return "••••" + acct[len(acct)-4:]
+}
+
+// financialVal returns a field value from CompanyFinancials for pre-filling forms.
+func financialVal(f *domain.CompanyFinancials, field string) string {
+	if f == nil {
+		return ""
+	}
+	switch field {
+	case "bank_name":
+		return f.BankName
+	case "account_name":
+		return f.AccountName
+	case "bsb":
+		return f.BSB
+	case "account_number":
+		return f.AccountNumber
+	case "swift_code":
+		return f.SwiftCode
+	case "payment_provider":
+		return f.PaymentProvider
+	}
+	return ""
+}
+
+// financialPrefixVal returns the invoice prefix, defaulting to "INV".
+func financialPrefixVal(f *domain.CompanyFinancials) string {
+	if f == nil || f.InvoicePrefix == "" {
+		return "INV"
+	}
+	return f.InvoicePrefix
+}
+
+// financialCurrencyVal returns the invoice currency, defaulting to "AUD".
+func financialCurrencyVal(f *domain.CompanyFinancials) string {
+	if f == nil || f.InvoiceCurrency == "" {
+		return "AUD"
+	}
+	return f.InvoiceCurrency
+}

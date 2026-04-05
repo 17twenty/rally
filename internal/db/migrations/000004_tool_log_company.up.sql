@@ -1,0 +1,1 @@
+ALTER TABLE tool_logs ADD COLUMN IF NOT EXISTS company_id TEXT;
