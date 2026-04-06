@@ -464,6 +464,42 @@ func (h *AEAPIHandler) StoreMemory(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "stored"})
 }
 
+// SearchMemory handles GET /api/ae/memory/search — searches memory events by content.
+func (h *AEAPIHandler) SearchMemory(w http.ResponseWriter, r *http.Request) {
+	employeeID := r.Header.Get("X-AE-Employee-ID")
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		http.Error(w, `{"error":"q parameter required"}`, http.StatusBadRequest)
+		return
+	}
+
+	results, err := h.q().SearchMemoryEvents(r.Context(), dao.SearchMemoryEventsParams{
+		EmployeeID: employeeID,
+		Column2:    &query,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	type memoryResult struct {
+		Type      string `json:"type"`
+		Content   string `json:"content"`
+		CreatedAt string `json:"created_at"`
+	}
+	var items []memoryResult
+	for _, m := range results {
+		items = append(items, memoryResult{
+			Type:    m.Type,
+			Content: m.Content,
+			CreatedAt: db.PgTime(m.CreatedAt).Format("2006-01-02 15:04"),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"memories": items})
+}
+
 // SubmitLog handles POST /api/ae/logs — records a tool execution log.
 func (h *AEAPIHandler) SubmitLog(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -1267,6 +1303,7 @@ func (h *AEAPIHandler) ApproveHire(w http.ResponseWriter, r *http.Request) {
 			Role:       hire.Role,
 			Department: db.Deref(hire.Department),
 			ReportsTo:  db.Deref(hire.ReportsTo),
+			Rationale:  db.Deref(hire.Rationale),
 		}, nil)
 		if insertErr != nil {
 			slog.Warn("approve_hire: queue insert failed, will try direct hiring", "err", insertErr)

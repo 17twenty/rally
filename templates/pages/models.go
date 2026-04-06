@@ -53,10 +53,12 @@ type AgentsPageData struct {
 // WorkItemRow is a display-friendly view of a work item.
 type WorkItemRow struct {
 	ID        string
+	OwnerName string
+	OwnerRole string
 	Title     string
 	Status    string
 	Priority  string
-	UpdatedAt time.Time
+	UpdatedAt string
 }
 
 // AgentDetailData holds data for the single-agent detail page.
@@ -110,8 +112,9 @@ type TaskRow struct {
 
 // TasksPageData holds data for the tasks list page.
 type TasksPageData struct {
-	Tasks        []TaskRow
-	Companies    []domain.Company
+	Tasks           []TaskRow
+	WorkItems       []WorkItemRow
+	Companies       []domain.Company
 	FilterStatus    string
 	FilterCompanyID string
 }

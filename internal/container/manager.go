@@ -147,6 +147,38 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateAndStartOpts) (
 		_ = os.WriteFile(filepath.Join(teamDir, slug+".soul.md"), []byte(opts.SoulMD), 0o644)
 	}
 
+	// Write HOWTOWORK.md — the AE's orientation doc (like CLAUDE.md for AEs).
+	howToWork := fmt.Sprintf(`# How to Work — %s (%s)
+
+You are an AI employee at %s. You have tools to get work done.
+
+## Your Tools
+- **Bash**: Run shell commands in /workspace or /home/ae/scratch
+- **Read/Write/Edit**: File operations in your workspace
+- **Grep/Glob**: Search code and files
+- **SlackSend**: Post messages to Slack (use sparingly, no status spam)
+- **BacklogList/BacklogAdd/BacklogUpdate**: Track your work items
+- **UpdateTask**: Mark assigned tasks in_progress or done
+- **Delegate/SendMessage**: Collaborate with teammates
+- **Remember/RecallMemory**: Store and search your memories
+- **ProposeHire**: CEO only — propose new team members
+
+## Key Rules
+1. Do NOT post status updates to Slack. Only post results.
+2. Check BacklogList before BacklogAdd — no duplicates.
+3. Mark work items done when complete (BacklogUpdate).
+4. Mark assigned tasks done when complete (UpdateTask).
+5. Use Remember to store decisions for future cycles.
+6. Write files to /workspace (shared) or /home/ae/scratch (private).
+
+## File Layout
+- /workspace/ — shared with all team members
+- /home/ae/scratch/ — your private working space
+- /home/ae/scratch/soul.md — your personality/identity
+- /home/ae/scratch/session_state.md — your notes across cycles
+`, opts.AEName, opts.Role, opts.CompanyName)
+	_ = os.WriteFile(filepath.Join(scratchDir, "HOWTOWORK.md"), []byte(howToWork), 0o644)
+
 	if err := m.EnsureNetwork(ctx); err != nil {
 		return "", err
 	}

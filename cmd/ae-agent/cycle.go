@@ -52,9 +52,9 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 	// This prevents the model from posting unsolicited status updates to Slack.
 	hasWork := len(obs.SlackEvents) > 0 || len(obs.Tasks) > 0 ||
 		len(obs.Messages) > 0
-	// Also act if we have in-progress or blocked work items.
+	// Also act if we have active work items (todo, in_progress, or blocked).
 	for _, wi := range obs.WorkItems {
-		if wi.Status == "in_progress" || wi.Status == "blocked" {
+		if wi.Status == "todo" || wi.Status == "in_progress" || wi.Status == "blocked" {
 			hasWork = true
 			break
 		}
@@ -157,15 +157,37 @@ done:
 	defer reflCancel()
 
 	if totalToolCalls > 0 || finalText != "" {
+		// Build a condensed reflection request — the full conversation is too large
+		// and causes the model to return empty. Send just a summary + prompt.
+		var actionSummary strings.Builder
+		actionSummary.WriteString(fmt.Sprintf("Cycle %d summary:\n", c.CycleCount))
+		actionSummary.WriteString(fmt.Sprintf("Tools used: %s\n", strings.Join(unique(toolsUsed), ", ")))
+		if finalText != "" {
+			actionSummary.WriteString(fmt.Sprintf("Final response: %s\n", truncate(finalText, 500)))
+		}
+		// Include the last few tool calls for specificity.
+		for i := len(messages) - 1; i >= 0 && i >= len(messages)-6; i-- {
+			m := messages[i]
+			if len(m.ToolCalls) > 0 {
+				for _, tc := range m.ToolCalls {
+					inputSnip, _ := json.Marshal(tc.Input)
+					actionSummary.WriteString(fmt.Sprintf("- Called %s(%s)\n", tc.Name, truncate(string(inputSnip), 100)))
+				}
+			}
+		}
+
 		reflectionPrompt := `Summarise this cycle in 2-3 sentences for your future self. Include:
 - What you did (actions taken, messages sent)
 - Key decisions or things you said (so you stay consistent)
 - What to follow up on next cycle
 Be specific and factual. This is your memory — it helps you maintain continuity.`
 
-		messages = append(messages, ChatMessage{Role: "user", Content: reflectionPrompt})
+		reflMessages := []ChatMessage{
+			{Role: "system", Content: fmt.Sprintf("You are %s, the %s. Reflect on what you just did.", c.AEName, c.AERole)},
+			{Role: "user", Content: actionSummary.String() + "\n" + reflectionPrompt},
+		}
 		reflResult, reflErr := c.Rally.ChatLLM(reflCtx, ChatLLMRequest{
-			ModelRef: modelRef, Messages: messages, Tools: nil, MaxTokens: 500,
+			ModelRef: modelRef, Messages: reflMessages, Tools: nil, MaxTokens: 500,
 		})
 		if reflErr != nil {
 			slog.Warn("cycle: reflection LLM failed, storing fallback", "err", reflErr)
@@ -185,7 +207,14 @@ Be specific and factual. This is your memory — it helps you maintain continuit
 				slog.Info("cycle: reflection stored", "content", truncate(reflResult.Message.Content, 200))
 			}
 		} else {
-			slog.Warn("cycle: reflection LLM returned empty")
+			slog.Warn("cycle: reflection LLM returned empty, storing fallback")
+			fallback := fmt.Sprintf("Cycle %d: Used %s. %s",
+				c.CycleCount, strings.Join(unique(toolsUsed), ", "), truncate(finalText, 200))
+			if storeErr := c.Rally.StoreMemory(reflCtx, "episodic", fallback, map[string]any{
+				"cycle": c.CycleCount, "tool_calls": totalToolCalls,
+			}); storeErr != nil {
+				slog.Warn("cycle: StoreMemory fallback failed", "err", storeErr)
+			}
 		}
 	} else {
 		_ = c.Rally.StoreMemory(reflCtx, "episodic",
@@ -293,6 +322,11 @@ You are an AI employee. You take action — you don't schedule meetings or prete
 - SendMessage: quick question to a colleague
 - Escalate: flag something for human attention
 - ProposeHire: CEO only — propose new team members
+
+### Important
+- If a hire proposal no longer appears in your observations, it has been handled (approved + hired, or rejected). Do NOT follow up on it.
+- If you need credentials or access you don't have, add a BacklogItem as blocked with a note about what you need. Do NOT repeatedly escalate or message about the same missing credential — escalate ONCE, then move on to other work.
+- RecallMemory: search your stored memories for past decisions and context.
 `)
 
 	return sb.String()
@@ -580,6 +614,16 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 			isError = true
 		} else {
 			resultContent = fmt.Sprintf(`{"status":"remembered","type":"%s"}`, memType)
+		}
+
+	case "RecallMemory":
+		query, _ := tc.Input["query"].(string)
+		data, err := c.Rally.SearchMemories(ctx, query)
+		if err != nil {
+			resultContent = fmt.Sprintf("Error: %s", err.Error())
+			isError = true
+		} else {
+			resultContent = string(data)
 		}
 
 	// --- Hiring ---

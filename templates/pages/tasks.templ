@@ -104,7 +104,94 @@ templ Tasks(data TasksPageData) {
 					}
 				}
 			}
+			<!-- Work Items (AE Backlog) -->
+			<h2 class="text-xl font-bold mt-8">Work Items (AE Backlog)</h2>
+			@card.Card() {
+				@card.Content(card.ContentProps{Class: "p-0"}) {
+					if len(data.WorkItems) == 0 {
+						<div class="flex flex-col items-center justify-center gap-3 py-8 text-center">
+							<p class="text-muted-foreground">No work items found.</p>
+						</div>
+					} else {
+						@table.Table() {
+							@table.Header() {
+								@table.Row() {
+									@table.Head() { Title }
+									@table.Head() { Owner }
+									@table.Head() { Status }
+									@table.Head() { Priority }
+									@table.Head() { Updated }
+								}
+							}
+							@table.Body() {
+								for _, wi := range data.WorkItems {
+									@table.Row() {
+										@table.Cell() {
+											<span class="font-medium">{ wi.Title }</span>
+										}
+										@table.Cell() {
+											<span class="text-sm">{ wi.OwnerName }</span>
+											<span class="text-xs text-muted-foreground ml-1">({ wi.OwnerRole })</span>
+										}
+										@table.Cell() {
+											@workItemStatusBadge(wi.Status)
+										}
+										@table.Cell() {
+											@workItemPriorityBadge(wi.Priority)
+										}
+										@table.Cell() {
+											<span class="text-sm text-muted-foreground">{ wi.UpdatedAt }</span>
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		</div>
+	}
+}
+
+templ workItemStatusBadge(status string) {
+	switch status {
+	case "todo":
+		@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+			{ status }
+		}
+	case "in_progress":
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			in progress
+		}
+	case "done":
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			{ status }
+		}
+	case "blocked":
+		@badge.Badge(badge.Props{Variant: badge.VariantDestructive}) {
+			{ status }
+		}
+	default:
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			{ status }
+		}
+	}
+}
+
+templ workItemPriorityBadge(priority string) {
+	switch priority {
+	case "critical":
+		@badge.Badge(badge.Props{Variant: badge.VariantDestructive}) {
+			{ priority }
+		}
+	case "high":
+		@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+			{ priority }
+		}
+	default:
+		@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+			{ priority }
+		}
 	}
 }
 

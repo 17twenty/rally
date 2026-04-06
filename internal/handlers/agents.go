@@ -99,7 +99,7 @@ func (h *AgentHandler) Detail(w http.ResponseWriter, r *http.Request) {
 				Title:     row.Title,
 				Status:    row.Status,
 				Priority:  row.Priority,
-				UpdatedAt: db.PgTime(row.UpdatedAt),
+				UpdatedAt: db.PgTime(row.UpdatedAt).Format("Jan 2, 15:04"),
 			})
 		}
 	}

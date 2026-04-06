@@ -26,7 +26,7 @@ func main() {
 	// Parse config for model ref and heartbeat interval.
 	// Fallback model only used if AE_CONFIG is missing; hiring flow sets the real value.
 	modelRef := envOr("DEFAULT_MODEL", "greenthread-gpt-oss-120b")
-	heartbeatSeconds := 300
+	heartbeatSeconds := 60 // Fast heartbeat for responsive Slack conversations.
 	if cfgJSON := os.Getenv("AE_CONFIG"); cfgJSON != "" {
 		var cfg struct {
 			Cognition struct {

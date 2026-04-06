@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/17twenty/rally/internal/container"
+	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/internal/hiring"
 	"github.com/17twenty/rally/internal/llm"
@@ -303,10 +304,26 @@ func (w *HiringWorker) Work(ctx context.Context, job *river.Job[HiringJobArgs]) 
 		Role:       job.Args.Role,
 		Department: job.Args.Department,
 		ReportsTo:  job.Args.ReportsTo,
+		Rationale:  job.Args.Rationale,
 	}
 
-	_, err = hirer.HireAE(ctx, job.Args.CompanyID, plan, company)
-	return err
+	emp, err := hirer.HireAE(ctx, job.Args.CompanyID, plan, company)
+	if err != nil {
+		return err
+	}
+
+	// Mark the proposed hire as completed so the CEO stops nagging about it.
+	q := dao.New(w.DB)
+	if markErr := q.MarkProposedHireComplete(ctx, dao.MarkProposedHireCompleteParams{
+		CompanyID: job.Args.CompanyID,
+		Role:      job.Args.Role,
+	}); markErr != nil {
+		slog.Warn("hiring: failed to mark proposed hire as complete", "role", job.Args.Role, "err", markErr)
+	} else {
+		slog.Info("hiring: proposed hire marked as hired", "role", job.Args.Role, "employee", emp.Name)
+	}
+
+	return nil
 }
 
 // CampaignDraftWorker drafts a marketing campaign using the LLM and saves it as a workspace file.

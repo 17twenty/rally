@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/a-h/templ"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/17twenty/rally/internal/db"
 	"github.com/17twenty/rally/internal/db/dao"
@@ -84,6 +85,42 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 					&tr.AssigneeName, &tr.CompanyName,
 				); scanErr == nil {
 					data.Tasks = append(data.Tasks, tr)
+				}
+			}
+		}
+
+		// Load work items (AE backlog) for each company in the filter.
+		wiQuery := `
+			SELECT wi.id, COALESCE(e.name, e.role) as owner_name, e.role as owner_role,
+			       wi.title, wi.status, wi.priority, wi.updated_at
+			FROM work_items wi
+			JOIN employees e ON e.id = wi.owner_id
+			WHERE wi.status NOT IN ('cancelled')
+		`
+		wiArgs := []any{}
+		wiArgIdx := 1
+		if filterCompanyID != "" {
+			wiQuery += fmt.Sprintf(" AND wi.company_id = $%d", wiArgIdx)
+			wiArgs = append(wiArgs, filterCompanyID)
+			wiArgIdx++
+		}
+		if filterStatus != "" {
+			wiQuery += fmt.Sprintf(" AND wi.status = $%d", wiArgIdx)
+			wiArgs = append(wiArgs, filterStatus)
+			wiArgIdx++
+		}
+		_ = wiArgIdx
+		wiQuery += " ORDER BY CASE wi.status WHEN 'in_progress' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2 ELSE 3 END, wi.updated_at DESC LIMIT 50"
+
+		wiRows, wiErr := h.DB.Pool.Query(ctx, wiQuery, wiArgs...)
+		if wiErr == nil {
+			defer wiRows.Close()
+			for wiRows.Next() {
+				var wi pages.WorkItemRow
+				var updatedAt pgtype.Timestamptz
+				if scanErr := wiRows.Scan(&wi.ID, &wi.OwnerName, &wi.OwnerRole, &wi.Title, &wi.Status, &wi.Priority, &updatedAt); scanErr == nil {
+					wi.UpdatedAt = db.PgTime(updatedAt).Format("Jan 2, 15:04")
+					data.WorkItems = append(data.WorkItems, wi)
 				}
 			}
 		}

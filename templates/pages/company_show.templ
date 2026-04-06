@@ -511,9 +511,17 @@ templ orgChartTree(employees []domain.Employee) {
 			}
 		</div>
 		<!-- IC level (Engineer, etc.) -->
-		<div class="flex gap-4 justify-center">
+		<div class="flex gap-4 justify-center flex-wrap">
 			for _, emp := range employees {
 				if emp.Type == "ae" && roleLevel(emp.Role) == 2 {
+					@orgCard(emp)
+				}
+			}
+		</div>
+		<!-- All other AE roles (dynamic roles not in fixed tiers) -->
+		<div class="flex gap-4 justify-center flex-wrap">
+			for _, emp := range employees {
+				if emp.Type == "ae" && roleLevel(emp.Role) == 3 {
 					@orgCard(emp)
 				}
 			}

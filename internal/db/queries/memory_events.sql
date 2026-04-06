@@ -8,3 +8,6 @@ SELECT * FROM memory_events WHERE employee_id = $1 ORDER BY created_at DESC LIMI
 
 -- name: GetMemoryEventsByType :many
 SELECT * FROM memory_events WHERE employee_id = $1 AND type = $2 ORDER BY created_at DESC LIMIT $3;
+
+-- name: SearchMemoryEvents :many
+SELECT * FROM memory_events WHERE employee_id = $1 AND content ILIKE '%' || $2 || '%' ORDER BY created_at DESC LIMIT 20;

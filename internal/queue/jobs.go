@@ -34,6 +34,7 @@ type HiringJobArgs struct {
 	Role       string `json:"role"`
 	Department string `json:"department"`
 	ReportsTo  string `json:"reports_to"`
+	Rationale  string `json:"rationale"`
 }
 
 func (HiringJobArgs) Kind() string { return "hiring" }

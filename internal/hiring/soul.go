@@ -8,77 +8,47 @@ import (
 	"github.com/17twenty/rally/internal/llm"
 )
 
-// GenerateAEName calls the LLM to generate a unique short human first name for the AE.
-// existingNames is a list of names already in use — the generated name must not collide.
+// GenerateAEName picks a unique name from the pool, avoiding existing names.
+// Falls back to LLM generation if the pool is exhausted.
 func GenerateAEName(ctx context.Context, router *llm.Router, role string, companyName string, existingNames []string) (string, error) {
-	avoidList := ""
-	if len(existingNames) > 0 {
-		avoidList = fmt.Sprintf(" Do NOT use any of these names: %s.", strings.Join(existingNames, ", "))
+	usedLower := make(map[string]bool, len(existingNames))
+	for _, n := range existingNames {
+		usedLower[strings.ToLower(n)] = true
 	}
 
-	systemPrompt := "You are a naming assistant. Respond with a single word only."
-	userPrompt := fmt.Sprintf("Generate a single short human first name (one word only, no explanation) for an AI employee with the role of %s at %s.%s Respond with just the name.", role, companyName, avoidList)
-
-	result, err := router.Complete(ctx, router.DefaultModel(), systemPrompt, userPrompt, 10)
-	if err == nil {
-		name := strings.TrimSpace(result)
-		if name != "" && !strings.Contains(name, " ") {
-			// Verify uniqueness
-			nameLower := strings.ToLower(name)
-			for _, existing := range existingNames {
-				if strings.ToLower(existing) == nameLower {
-					// Collision — try fallback with suffix
-					return name + "2", nil
-				}
-			}
+	// Pick from pool first — deterministic, no LLM needed.
+	for _, name := range namePool {
+		if !usedLower[strings.ToLower(name)] {
 			return name, nil
 		}
 	}
 
-	// Fallback: generate a unique name from role
-	base := fallbackName(role)
-	for i := 0; i < 10; i++ {
-		candidate := base
-		if i > 0 {
-			candidate = fmt.Sprintf("%s%d", base, i+1)
-		}
-		unique := true
-		for _, existing := range existingNames {
-			if strings.EqualFold(existing, candidate) {
-				unique = false
-				break
-			}
-		}
-		if unique {
-			return candidate, nil
+	// Pool exhausted — ask LLM.
+	avoidList := strings.Join(existingNames, ", ")
+	result, err := router.Complete(ctx, router.DefaultModel(),
+		"You are a naming assistant. Respond with a single word only.",
+		fmt.Sprintf("Generate a unique first name not in this list: %s. One word only.", avoidList), 10)
+	if err == nil {
+		name := strings.TrimSpace(result)
+		if name != "" && !strings.Contains(name, " ") && !usedLower[strings.ToLower(name)] {
+			return name, nil
 		}
 	}
 
-	return base + fmt.Sprintf("%d", len(existingNames)+1), nil
+	return fmt.Sprintf("AE%d", len(existingNames)+1), nil
 }
 
-// fallbackName returns a default first name for the given role.
+// namePool is a Docker-style pool of names. Each name is used at most once per org.
+var namePool = []string{
+	"Alex", "Blake", "Casey", "Dana", "Eden", "Finn", "Gray", "Harper",
+	"Indigo", "Jordan", "Kai", "Luna", "Morgan", "Nova", "Onyx", "Parker",
+	"Quinn", "Riley", "Sage", "Taylor", "Uri", "Vale", "Wren", "Xander",
+	"Yara", "Zoe", "Ash", "Brook", "Camden", "Devon",
+}
+
+// fallbackName picks the first unused name from the pool.
 func fallbackName(role string) string {
-	switch strings.ToLower(role) {
-	case "ceo":
-		return "Alex"
-	case "cto":
-		return "Jordan"
-	case "software engineer", "engineer":
-		return "Sam"
-	case "developer":
-		return "Casey"
-	case "sdr":
-		return "Riley"
-	case "product manager":
-		return "Morgan"
-	case "cmo":
-		return "Taylor"
-	case "designer":
-		return "Quinn"
-	default:
-		return "Drew"
-	}
+	return namePool[0] // Will be overridden by pool selection in GenerateAEName
 }
 
 // GenerateSoulMD calls the LLM to generate a soul.md for the given AE role.

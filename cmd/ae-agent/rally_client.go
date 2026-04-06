@@ -269,6 +269,11 @@ func (c *RallyClient) StoreMemory(ctx context.Context, memType, content string, 
 	return err
 }
 
+// SearchMemories searches stored memory events by content keyword.
+func (c *RallyClient) SearchMemories(ctx context.Context, query string) ([]byte, error) {
+	return c.do(ctx, "GET", fmt.Sprintf("/api/ae/memory/search?q=%s", query), nil)
+}
+
 // SubmitLog records a tool execution log.
 func (c *RallyClient) SubmitLog(ctx context.Context, tool, action string, input, output map[string]any, success bool, traceID string) error {
 	_, err := c.do(ctx, "POST", "/api/ae/logs", map[string]any{

@@ -292,6 +292,20 @@ func localToolDefs() []ToolDefinition {
 				"required": []string{"content"},
 			},
 		},
+		{
+			Name:        "RecallMemory",
+			Description: "Search your stored memories by keyword. Use this to recall past decisions, actions, or context from previous cycles.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Keyword or phrase to search for in your memories",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
 		// --- Hiring ---
 		{
 			Name:        "ProposeHire",

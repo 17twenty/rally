@@ -120,3 +120,39 @@ func (q *Queries) InsertMemoryEvent(ctx context.Context, arg InsertMemoryEventPa
 	)
 	return i, err
 }
+
+const searchMemoryEvents = `-- name: SearchMemoryEvents :many
+SELECT id, employee_id, type, content, metadata, created_at FROM memory_events WHERE employee_id = $1 AND content ILIKE '%' || $2 || '%' ORDER BY created_at DESC LIMIT 20
+`
+
+type SearchMemoryEventsParams struct {
+	EmployeeID string  `json:"employee_id"`
+	Column2    *string `json:"column_2"`
+}
+
+func (q *Queries) SearchMemoryEvents(ctx context.Context, arg SearchMemoryEventsParams) ([]MemoryEvent, error) {
+	rows, err := q.db.Query(ctx, searchMemoryEvents, arg.EmployeeID, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MemoryEvent{}
+	for rows.Next() {
+		var i MemoryEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.EmployeeID,
+			&i.Type,
+			&i.Content,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

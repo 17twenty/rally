@@ -312,9 +312,9 @@ func AgentDetail(data AgentDetailData) templ.Component {
 								return templ_7745c5c3_Err
 							}
 							var templ_7745c5c3_Var16 string
-							templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(wi.UpdatedAt.Format("Jan 2 15:04"))
+							templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(wi.UpdatedAt)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `templates/pages/agent_detail.templ`, Line: 88, Col: 89}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `templates/pages/agent_detail.templ`, Line: 88, Col: 67}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 							if templ_7745c5c3_Err != nil {

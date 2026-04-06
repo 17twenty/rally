@@ -25,3 +25,6 @@ UPDATE proposed_hires SET status = 'approved', reviewed_by = $2 WHERE id = $1;
 
 -- name: RejectProposedHire :exec
 UPDATE proposed_hires SET status = 'rejected', reviewed_by = $2 WHERE id = $1;
+
+-- name: MarkProposedHireComplete :exec
+UPDATE proposed_hires SET status = 'hired' WHERE company_id = $1 AND role = $2 AND status = 'approved';

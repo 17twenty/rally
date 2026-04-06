@@ -197,6 +197,20 @@ func (q *Queries) ListProposedHiresByCompany(ctx context.Context, companyID stri
 	return items, nil
 }
 
+const markProposedHireComplete = `-- name: MarkProposedHireComplete :exec
+UPDATE proposed_hires SET status = 'hired' WHERE company_id = $1 AND role = $2 AND status = 'approved'
+`
+
+type MarkProposedHireCompleteParams struct {
+	CompanyID string `json:"company_id"`
+	Role      string `json:"role"`
+}
+
+func (q *Queries) MarkProposedHireComplete(ctx context.Context, arg MarkProposedHireCompleteParams) error {
+	_, err := q.db.Exec(ctx, markProposedHireComplete, arg.CompanyID, arg.Role)
+	return err
+}
+
 const rejectProposedHire = `-- name: RejectProposedHire :exec
 UPDATE proposed_hires SET status = 'rejected', reviewed_by = $2 WHERE id = $1
 `
