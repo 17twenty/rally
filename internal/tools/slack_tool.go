@@ -38,7 +38,7 @@ func (t *SlackTool) Execute(ctx context.Context, action string, input map[string
 		}
 		msg := text
 		if persona != "" {
-			msg = fmt.Sprintf("[%s] %s", persona, text)
+			msg = fmt.Sprintf("*%s:* %s", persona, text)
 		}
 		ts, err := t.Client.ReplyInThread(ctx, channel, threadTS, msg)
 		if err != nil {
@@ -60,6 +60,64 @@ func (t *SlackTool) Execute(ctx context.Context, action string, input map[string
 			}
 		}
 		return map[string]any{"channels": result}, nil
+
+	case "read_channel":
+		channel, _ := input["channel"].(string)
+		if channel == "" {
+			return nil, fmt.Errorf("slack.read_channel: channel required")
+		}
+		// Resolve channel name to ID if needed (e.g., "#all-rally-test" → "C0AQRPFU6HK").
+		if channel[0] == '#' {
+			ch, err := t.Client.GetChannelByName(ctx, channel[1:])
+			if err != nil {
+				return nil, fmt.Errorf("slack.read_channel: channel %s not found: %w", channel, err)
+			}
+			channel = ch.ID
+		}
+		limit := 20
+		if l, ok := input["limit"].(float64); ok && l > 0 {
+			limit = int(l)
+		}
+		messages, err := t.Client.ReadChannel(ctx, channel, limit)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]map[string]any, len(messages))
+		for i, m := range messages {
+			result[i] = map[string]any{
+				"user": m.User, "text": m.Text, "ts": m.TS, "type": m.Type,
+			}
+		}
+		return map[string]any{"messages": result, "count": len(result)}, nil
+
+	case "read_thread":
+		channel, _ := input["channel"].(string)
+		threadTS, _ := input["thread_ts"].(string)
+		if channel == "" || threadTS == "" {
+			return nil, fmt.Errorf("slack.read_thread: channel and thread_ts required")
+		}
+		if channel[0] == '#' {
+			ch, err := t.Client.GetChannelByName(ctx, channel[1:])
+			if err != nil {
+				return nil, fmt.Errorf("slack.read_thread: channel %s not found: %w", channel, err)
+			}
+			channel = ch.ID
+		}
+		limit := 20
+		if l, ok := input["limit"].(float64); ok && l > 0 {
+			limit = int(l)
+		}
+		messages, err := t.Client.ReadThread(ctx, channel, threadTS, limit)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]map[string]any, len(messages))
+		for i, m := range messages {
+			result[i] = map[string]any{
+				"user": m.User, "text": m.Text, "ts": m.TS, "type": m.Type,
+			}
+		}
+		return map[string]any{"messages": result, "count": len(result)}, nil
 
 	case "add_reaction":
 		channel, _ := input["channel"].(string)

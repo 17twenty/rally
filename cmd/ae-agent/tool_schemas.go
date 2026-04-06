@@ -273,10 +273,29 @@ func localToolDefs() []ToolDefinition {
 				"required": []string{"task_id", "status"},
 			},
 		},
+		// --- Memory ---
+		{
+			Name:        "Remember",
+			Description: "Save something important to your long-term memory. Use this when you make a decision, learn something, or want to maintain consistency across cycles. What you remember will appear in future observations.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"content": map[string]any{
+						"type":        "string",
+						"description": "What to remember — be specific and factual",
+					},
+					"type": map[string]any{
+						"type":        "string",
+						"description": "reflection (what you learned/decided), heuristic (a pattern/rule to follow), or episodic (what happened)",
+					},
+				},
+				"required": []string{"content"},
+			},
+		},
 		// --- Hiring ---
 		{
 			Name:        "ProposeHire",
-			Description: "Propose a new team member to be hired. The proposal will be reviewed by human leadership. Include a clear rationale for why this role is needed.",
+			Description: "Propose a new team member to be hired. The proposal will be reviewed by human leadership. An approval link will be posted to the specified Slack channel.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -284,6 +303,7 @@ func localToolDefs() []ToolDefinition {
 					"department": map[string]any{"type": "string", "description": "Department (e.g., Engineering, Sales, Marketing)"},
 					"rationale":  map[string]any{"type": "string", "description": "Why this hire is needed — what gap does it fill?"},
 					"reports_to": map[string]any{"type": "string", "description": "Role this person reports to (e.g., CEO, CTO)"},
+					"channel":    map[string]any{"type": "string", "description": "Slack channel to post the approval link to"},
 				},
 				"required": []string{"role", "rationale"},
 			},

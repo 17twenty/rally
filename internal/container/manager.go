@@ -138,6 +138,15 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateAndStartOpts) (
 	// Seed shared workspace with company README and policies on first hire.
 	SeedWorkspace(sharedDir, opts.CompanyName, opts.CompanyMission, opts.PolicyDoc)
 
+	// Write soul.md to scratch (private) and shared team dir.
+	if opts.SoulMD != "" {
+		_ = os.WriteFile(filepath.Join(scratchDir, "soul.md"), []byte(opts.SoulMD), 0o644)
+		teamDir := filepath.Join(sharedDir, "team")
+		_ = os.MkdirAll(teamDir, 0o755)
+		slug := strings.ToLower(strings.ReplaceAll(opts.Role, " ", "-"))
+		_ = os.WriteFile(filepath.Join(teamDir, slug+".soul.md"), []byte(opts.SoulMD), 0o644)
+	}
+
 	if err := m.EnsureNetwork(ctx); err != nil {
 		return "", err
 	}

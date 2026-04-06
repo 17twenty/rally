@@ -8,12 +8,107 @@ package dao
 import (
 	"context"
 	"encoding/json"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getRecentSlackEvents = `-- name: GetRecentSlackEvents :many
+SELECT id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, processed_at, created_at, text FROM slack_events WHERE company_id = $1 AND created_at > now() - interval '10 minutes' ORDER BY created_at DESC LIMIT $2
+`
+
+type GetRecentSlackEventsParams struct {
+	CompanyID string `json:"company_id"`
+	Limit     int32  `json:"limit"`
+}
+
+func (q *Queries) GetRecentSlackEvents(ctx context.Context, arg GetRecentSlackEventsParams) ([]SlackEvent, error) {
+	rows, err := q.db.Query(ctx, getRecentSlackEvents, arg.CompanyID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SlackEvent{}
+	for rows.Next() {
+		var i SlackEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyID,
+			&i.EventType,
+			&i.Channel,
+			&i.UserID,
+			&i.ThreadTs,
+			&i.MessageTs,
+			&i.Payload,
+			&i.ProcessedAt,
+			&i.CreatedAt,
+			&i.Text,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getRecentSlackMessagesExcludingBot = `-- name: GetRecentSlackMessagesExcludingBot :many
+SELECT id, event_type, COALESCE(channel,'') as channel, COALESCE(user_id,'') as user_id,
+       COALESCE(text,'') as text, COALESCE(thread_ts,'') as thread_ts, COALESCE(message_ts,'') as message_ts
+FROM slack_events
+WHERE company_id = $1
+  AND created_at > now() - interval '5 minutes'
+  AND event_type IN ('message', 'app_mention')
+  AND (user_id IS NULL OR user_id != $2)
+ORDER BY created_at ASC
+LIMIT $3
+`
+
+type GetRecentSlackMessagesExcludingBotParams struct {
+	CompanyID string  `json:"company_id"`
+	UserID    *string `json:"user_id"`
+	Limit     int32   `json:"limit"`
+}
+
+type GetRecentSlackMessagesExcludingBotRow struct {
+	ID        string `json:"id"`
+	EventType string `json:"event_type"`
+	Channel   string `json:"channel"`
+	UserID    string `json:"user_id"`
+	Text      string `json:"text"`
+	ThreadTs  string `json:"thread_ts"`
+	MessageTs string `json:"message_ts"`
+}
+
+func (q *Queries) GetRecentSlackMessagesExcludingBot(ctx context.Context, arg GetRecentSlackMessagesExcludingBotParams) ([]GetRecentSlackMessagesExcludingBotRow, error) {
+	rows, err := q.db.Query(ctx, getRecentSlackMessagesExcludingBot, arg.CompanyID, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetRecentSlackMessagesExcludingBotRow{}
+	for rows.Next() {
+		var i GetRecentSlackMessagesExcludingBotRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.EventType,
+			&i.Channel,
+			&i.UserID,
+			&i.Text,
+			&i.ThreadTs,
+			&i.MessageTs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getUnprocessedSlackEvents = `-- name: GetUnprocessedSlackEvents :many
-SELECT id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, processed_at, created_at FROM slack_events WHERE processed_at IS NULL AND company_id = $1 ORDER BY created_at LIMIT $2
+SELECT id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, processed_at, created_at, text FROM slack_events WHERE processed_at IS NULL AND company_id = $1 ORDER BY created_at LIMIT $2
 `
 
 type GetUnprocessedSlackEventsParams struct {
@@ -41,6 +136,7 @@ func (q *Queries) GetUnprocessedSlackEvents(ctx context.Context, arg GetUnproces
 			&i.Payload,
 			&i.ProcessedAt,
 			&i.CreatedAt,
+			&i.Text,
 		); err != nil {
 			return nil, err
 		}
@@ -53,21 +149,21 @@ func (q *Queries) GetUnprocessedSlackEvents(ctx context.Context, arg GetUnproces
 }
 
 const insertSlackEvent = `-- name: InsertSlackEvent :one
-INSERT INTO slack_events (id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, created_at)
+INSERT INTO slack_events (id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, text)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, processed_at, created_at
+RETURNING id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, processed_at, created_at, text
 `
 
 type InsertSlackEventParams struct {
-	ID        string             `json:"id"`
-	CompanyID string             `json:"company_id"`
-	EventType string             `json:"event_type"`
-	Channel   *string            `json:"channel"`
-	UserID    *string            `json:"user_id"`
-	ThreadTs  *string            `json:"thread_ts"`
-	MessageTs *string            `json:"message_ts"`
-	Payload   json.RawMessage    `json:"payload"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID        string          `json:"id"`
+	CompanyID string          `json:"company_id"`
+	EventType string          `json:"event_type"`
+	Channel   *string         `json:"channel"`
+	UserID    *string         `json:"user_id"`
+	ThreadTs  *string         `json:"thread_ts"`
+	MessageTs *string         `json:"message_ts"`
+	Payload   json.RawMessage `json:"payload"`
+	Text      *string         `json:"text"`
 }
 
 func (q *Queries) InsertSlackEvent(ctx context.Context, arg InsertSlackEventParams) (SlackEvent, error) {
@@ -80,7 +176,7 @@ func (q *Queries) InsertSlackEvent(ctx context.Context, arg InsertSlackEventPara
 		arg.ThreadTs,
 		arg.MessageTs,
 		arg.Payload,
-		arg.CreatedAt,
+		arg.Text,
 	)
 	var i SlackEvent
 	err := row.Scan(
@@ -94,6 +190,7 @@ func (q *Queries) InsertSlackEvent(ctx context.Context, arg InsertSlackEventPara
 		&i.Payload,
 		&i.ProcessedAt,
 		&i.CreatedAt,
+		&i.Text,
 	)
 	return i, err
 }

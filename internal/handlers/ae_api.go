@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -23,6 +25,17 @@ import (
 
 // q returns a dao.Queries instance for the handler's DB pool.
 func (h *AEAPIHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
+
+// ensureSlackClient loads the Slack token from vault if the client isn't set.
+// This handles the case where Slack was connected via OAuth after server startup.
+func (h *AEAPIHandler) ensureSlackClient(ctx context.Context) {
+	if h.SlackClient == nil && h.Vault != nil {
+		if token, err := h.Vault.Get(ctx, "rally-system", "slack"); err == nil && token != "" {
+			h.SlackClient = slack.NewClient(token)
+			slog.Info("slack: loaded bot token from vault (lazy init)")
+		}
+	}
+}
 
 // AEAPIHandler handles the /api/ae/* endpoints used by AE agent containers.
 type AEAPIHandler struct {
@@ -95,12 +108,11 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	type slackEventObs struct {
-		ID        string         `json:"id"`
-		EventType string         `json:"event_type"`
-		Channel   string         `json:"channel"`
-		UserID    string         `json:"user_id"`
-		ThreadTS  string         `json:"thread_ts"`
-		Payload   map[string]any `json:"payload"`
+		Channel  string `json:"channel"`
+		UserID   string `json:"user_id"`
+		Text     string `json:"text"`
+		ThreadTS string `json:"thread_ts"`
+		TS       string `json:"ts"`
 	}
 
 	type memoryObs struct {
@@ -115,30 +127,35 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 		Status      string `json:"status"`
 	}
 
-	// Fetch unprocessed Slack events for this company
+	// Fetch recent Slack messages, excluding bot's own messages.
+	// Rally is the Slack gateway — AEs see message text directly from the DB.
 	var slackEvents []slackEventObs
-	daoEvents, err := h.q().GetUnprocessedSlackEvents(ctx, dao.GetUnprocessedSlackEventsParams{
+	botUserID := "" // filter out bot's own messages
+	if c, cErr := h.q().GetCompany(ctx, companyID); cErr == nil {
+		botUserID = db.Deref(c.SlackBotUserID)
+	}
+	daoEvents, err := h.q().GetRecentSlackMessagesExcludingBot(ctx, dao.GetRecentSlackMessagesExcludingBotParams{
 		CompanyID: companyID,
+		UserID:    &botUserID,
 		Limit:     10,
 	})
 	if err == nil {
 		for _, e := range daoEvents {
-			evt := slackEventObs{
-				ID:        e.ID,
-				EventType: e.EventType,
-				Channel:   db.Deref(e.Channel),
-				UserID:    db.Deref(e.UserID),
-				ThreadTS:  db.Deref(e.ThreadTs),
-			}
-			_ = json.Unmarshal(e.Payload, &evt.Payload)
-			slackEvents = append(slackEvents, evt)
+			slackEvents = append(slackEvents, slackEventObs{
+				Channel:  e.Channel,
+				UserID:   e.UserID,
+				Text:     e.Text,
+				ThreadTS: e.ThreadTs,
+				TS:       e.MessageTs,
+			})
 		}
 	}
 
-	// Fetch recent memories
+	// Fetch all memory types — episodic (recent activity), reflections (learnings),
+	// heuristics (rules). All feed back into the agent's context each cycle.
 	var memories []memoryObs
 	store := memory.NewMemoryStore(h.DB.Pool)
-	recent, err := store.GetByType(ctx, employeeID, "episodic", 5)
+	recent, err := store.GetRecent(ctx, employeeID, 15) // all types, last 15
 	if err == nil {
 		for _, m := range recent {
 			memories = append(memories, memoryObs{Type: m.Type, Content: m.Content})
@@ -226,12 +243,16 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 		company = companyObs{Name: c.Name, Mission: db.Deref(c.Mission)}
 	}
 
-	// Load model_ref from employee config (allows dynamic model changes without rehiring).
+	// Load employee config for model_ref and soul.
 	var modelRef string
+	var soulMD string
 	if ec, ecErr := h.q().GetEmployeeConfig(ctx, employeeID); ecErr == nil {
 		var cfg domain.EmployeeConfig
-		if jsonErr := json.Unmarshal(ec.Config, &cfg); jsonErr == nil && cfg.Cognition.DefaultModelRef != "" {
-			modelRef = cfg.Cognition.DefaultModelRef
+		if jsonErr := json.Unmarshal(ec.Config, &cfg); jsonErr == nil {
+			if cfg.Cognition.DefaultModelRef != "" {
+				modelRef = cfg.Cognition.DefaultModelRef
+			}
+			soulMD = cfg.Identity.SoulFile
 		}
 	}
 
@@ -256,6 +277,7 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 		"company":        company,
 		"team":           team,
 		"model_ref":      modelRef,
+		"soul_md":        soulMD,
 		"slack_events":   slackEvents,
 		"memories":       memories,
 		"tasks":          tasks,
@@ -365,8 +387,9 @@ func (h *AEAPIHandler) SlackSend(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("ae_slack_send", "employee_id", employeeID, "channel", req.Channel, "text_len", len(req.Text))
 
+	h.ensureSlackClient(r.Context())
 	if h.SlackClient == nil {
-		http.Error(w, `{"error":"slack not configured"}`, http.StatusServiceUnavailable)
+		http.Error(w, `{"error":"slack not configured — connect via Settings page"}`, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -397,8 +420,17 @@ func (h *AEAPIHandler) StoreMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	store := memory.NewMemoryStore(h.DB.Pool)
-	if err := store.SaveEpisodic(r.Context(), req.EmployeeID, req.Content, req.Metadata); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+	var saveErr error
+	switch req.Type {
+	case "reflection":
+		saveErr = store.SaveReflection(r.Context(), req.EmployeeID, req.Content)
+	case "heuristic":
+		saveErr = store.SaveHeuristic(r.Context(), req.EmployeeID, req.Content)
+	default:
+		saveErr = store.SaveEpisodic(r.Context(), req.EmployeeID, req.Content, req.Metadata)
+	}
+	if saveErr != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, saveErr.Error()), http.StatusInternalServerError)
 		return
 	}
 
@@ -506,6 +538,9 @@ func (h *AEAPIHandler) ExecuteTool(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Ensure Slack client is available (may have been connected via OAuth after startup).
+	h.ensureSlackClient(ctx)
+
 	// Build a ToolGateway for this request.
 	gw := &tools.ToolGateway{
 		DB:             h.DB.Pool,
@@ -585,6 +620,8 @@ func buildRemoteToolDefs(toolsConfig map[string]bool, role string) []remoteToolD
 			}, "required": []string{"channel", "thread_ts", "text"}}},
 		{Name: "slack_list_channels", Tool: "slack", Action: "list_channels", Description: "List all Slack channels",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}},
+		// Slack read tools removed — Rally is the Slack gateway.
+		// AEs see message text directly in observations from the DB.
 
 		// GitHub tools — always available (create_comment needs approval)
 		{Name: "github_list_prs", Tool: "github", Action: "list_prs", Description: "List pull requests in a repository",
@@ -914,13 +951,10 @@ func (h *AEAPIHandler) Escalate(w http.ResponseWriter, r *http.Request) {
 	emp, _ := h.q().GetEmployee(ctx, employeeID)
 	aeName := db.Deref(emp.Name)
 
-	// Post to Slack if available.
+	// Post escalation to Slack.
+	h.ensureSlackClient(ctx)
 	if h.SlackClient != nil {
-		urgencyEmoji := map[string]string{"low": "ℹ️", "medium": "⚠️", "high": "🚨"}[req.Urgency]
-		if urgencyEmoji == "" {
-			urgencyEmoji = "⚠️"
-		}
-		msg := fmt.Sprintf("%s *Escalation from %s* [%s]\n> %s", urgencyEmoji, aeName, req.Urgency, req.Reason)
+		msg := fmt.Sprintf("*Escalation from %s* [%s]\n> %s", aeName, req.Urgency, req.Reason)
 		if req.Context != "" {
 			msg += "\n\nContext: " + req.Context
 		}
@@ -1025,6 +1059,7 @@ func (h *AEAPIHandler) ProposeHire(w http.ResponseWriter, r *http.Request) {
 		Department string `json:"department"`
 		Rationale  string `json:"rationale"`
 		ReportsTo  string `json:"reports_to"`
+		Channel    string `json:"channel"` // Slack channel to post approval link to
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
@@ -1050,6 +1085,43 @@ func (h *AEAPIHandler) ProposeHire(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("propose_hire", "employee_id", employeeID, "role", req.Role, "department", req.Department)
+
+	// DM the founder with an approval link via Rally's bot.
+	// System notifications come from Rally directly, not from AEs in channels.
+	h.ensureSlackClient(ctx)
+	if h.SlackClient != nil {
+		rallyURL := os.Getenv("RALLY_URL")
+		if rallyURL == "" {
+			rallyURL = "http://localhost:8432"
+		}
+		approveURL := fmt.Sprintf("%s/companies/%s", rallyURL, companyID)
+
+		// Get AE name for context.
+		proposerName := "An AE"
+		if emp, empErr := h.q().GetEmployee(ctx, employeeID); empErr == nil {
+			proposerName = db.Deref(emp.Name)
+		}
+
+		msg := fmt.Sprintf("*%s proposed a hire:* %s (%s)\n> %s\n<%s|Review and approve in Rally>",
+			proposerName, req.Role, req.Department, req.Rationale, approveURL)
+
+		// Post to the channel where the conversation happened (if provided),
+		// AND to the founder's DM for visibility.
+		if req.Channel != "" {
+			_, _ = h.SlackClient.PostMessage(ctx, req.Channel, msg)
+		}
+
+		// Also DM the founder — find human employees and DM each.
+		if humans, hErr := h.q().ListHumanEmployeesByCompany(ctx, companyID); hErr == nil {
+			for _, h2 := range humans {
+				if slackUID := db.Deref(h2.SlackUserID); slackUID != "" {
+					_, _ = h.SlackClient.PostMessage(ctx, slackUID, msg)
+				}
+			}
+		}
+
+		slog.Info("propose_hire: approval notification sent", "role", req.Role)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1125,6 +1197,29 @@ func (h *AEAPIHandler) ApproveHire(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("approve_hire", "hire_id", hireID, "role", hire.Role)
+
+	// Announce the hire in Slack — Rally (the system) makes announcements, not AEs.
+	h.ensureSlackClient(ctx)
+	if h.SlackClient != nil {
+		// Find who proposed the hire.
+		proposerName := "the team"
+		if emp, empErr := h.q().GetEmployee(ctx, hire.ProposedBy); empErr == nil {
+			proposerName = db.Deref(emp.Name)
+		}
+
+		msg := fmt.Sprintf("*Welcome aboard!* %s has been approved and is being onboarded now.\n> Proposed by %s: %s",
+			hire.Role, proposerName, db.Deref(hire.Rationale))
+
+		// Post to the first channel the bot is in.
+		if channels, chErr := h.SlackClient.ListChannels(ctx); chErr == nil {
+			for _, ch := range channels {
+				if !ch.IsPrivate {
+					_, _ = h.SlackClient.PostMessage(ctx, ch.ID, msg)
+					break
+				}
+			}
+		}
+	}
 
 	http.Redirect(w, r, "/companies/"+hire.CompanyID+"?msg=Approved+"+hire.Role+"+—+hiring+now", http.StatusSeeOther)
 }

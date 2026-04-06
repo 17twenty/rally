@@ -44,14 +44,15 @@ type AeMessage struct {
 }
 
 type Company struct {
-	ID            string             `json:"id"`
-	Name          string             `json:"name"`
-	Mission       *string            `json:"mission"`
-	Status        string             `json:"status"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	PolicyDoc     *string            `json:"policy_doc"`
-	SlackTeamID   *string            `json:"slack_team_id"`
-	SlackTeamName *string            `json:"slack_team_name"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Mission        *string            `json:"mission"`
+	Status         string             `json:"status"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	PolicyDoc      *string            `json:"policy_doc"`
+	SlackTeamID    *string            `json:"slack_team_id"`
+	SlackTeamName  *string            `json:"slack_team_name"`
+	SlackBotUserID *string            `json:"slack_bot_user_id"`
 }
 
 type CompanyFinancial struct {
@@ -181,6 +182,7 @@ type SlackEvent struct {
 	Payload     json.RawMessage    `json:"payload"`
 	ProcessedAt pgtype.Timestamptz `json:"processed_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	Text        *string            `json:"text"`
 }
 
 type Task struct {

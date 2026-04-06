@@ -3,3 +3,5 @@ node_modules/
 /ae-agent
 /server
 /.workspaces/
+.env
+server

@@ -118,9 +118,10 @@ func (h *SlackOAuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 
 			// Also store team metadata.
 			_ = h.q().UpdateSlackTeam(r.Context(), dao.UpdateSlackTeamParams{
-				ID:            companyID,
-				SlackTeamID:   db.Ref(token.Team.ID),
-				SlackTeamName: db.Ref(token.Team.Name),
+				ID:              companyID,
+				SlackTeamID:     db.Ref(token.Team.ID),
+				SlackTeamName:   db.Ref(token.Team.Name),
+				SlackBotUserID: db.Ref(token.BotUserID),
 			})
 		}
 	}

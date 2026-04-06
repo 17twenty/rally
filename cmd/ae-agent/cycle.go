@@ -45,6 +45,22 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 		return fmt.Errorf("observe: %w", err)
 	}
 
+	// Skip the LLM entirely if there's nothing to act on.
+	// This prevents the model from posting unsolicited status updates to Slack.
+	hasWork := len(obs.SlackEvents) > 0 || len(obs.Tasks) > 0 ||
+		len(obs.Messages) > 0
+	// Also act if we have in-progress or blocked work items.
+	for _, wi := range obs.WorkItems {
+		if wi.Status == "in_progress" || wi.Status == "blocked" {
+			hasWork = true
+			break
+		}
+	}
+	if !hasWork {
+		slog.Info("cycle: nothing new, skipping")
+		return nil
+	}
+
 	// Use server-side model override if provided (allows dynamic model changes).
 	modelRef := c.ModelRef
 	if obs.ModelRef != "" {
@@ -62,7 +78,14 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 		})
 	}
 
-	systemPrompt := c.buildContext(obs, sessionState)
+	// Use soul from observations (DB is the single source of truth).
+	// Falls back to the env var soul if observations don't include it.
+	soul := obs.SoulMD
+	if soul == "" {
+		soul = c.SoulMD
+	}
+
+	systemPrompt := c.buildContext(obs, soul, sessionState)
 	userPrompt := c.buildSituation(obs)
 
 	messages := []ChatMessage{
@@ -72,6 +95,8 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 
 	// 3. Agentic loop — LLM calls tools, sees results, iterates.
 	totalToolCalls := 0
+	var toolsUsed []string
+	var finalText string
 	for turn := 0; turn < maxTurns; turn++ {
 		slog.Info("cycle: turn", "turn", turn+1, "messages", len(messages))
 
@@ -88,9 +113,10 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 
 		switch result.StopReason {
 		case "end_turn":
+			finalText = result.Message.Content
 			slog.Info("cycle: done", "turns", turn+1, "tool_calls", totalToolCalls)
-			if result.Message.Content != "" {
-				slog.Info("cycle: summary", "text", truncate(result.Message.Content, 200))
+			if finalText != "" {
+				slog.Info("cycle: summary", "text", truncate(finalText, 200))
 			}
 			goto done
 
@@ -108,6 +134,7 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 				tr := c.executeTool(ctx, tc)
 				toolResults = append(toolResults, tr)
 				totalToolCalls++
+				toolsUsed = append(toolsUsed, tc.Name)
 				_ = c.Rally.SubmitLog(ctx, tc.Name, "", tc.Input,
 					map[string]any{"content": truncate(tr.Content, 500)},
 					!tr.IsError, "")
@@ -122,13 +149,32 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 	slog.Warn("cycle: hit max turns", "max_turns", maxTurns)
 
 done:
-	// 4. Store cycle summary as episodic memory.
-	summary := fmt.Sprintf("Cycle %d completed. %d tool calls.", c.CycleCount, totalToolCalls)
-	_ = c.Rally.StoreMemory(ctx, "episodic", summary, map[string]any{
-		"cycle":        c.CycleCount,
-		"tool_calls":   totalToolCalls,
-		"message_count": len(messages),
-	})
+	// 4. Generate cycle reflection via LLM — the agent summarises what it did,
+	// what it learned, and what to follow up on. This is stored as episodic memory
+	// and feeds back into future cycles via observations.
+	if totalToolCalls > 0 || finalText != "" {
+		reflectionPrompt := `Summarise this cycle in 2-3 sentences for your future self. Include:
+- What you did (actions taken, messages sent)
+- Key decisions or things you said (so you stay consistent)
+- What to follow up on next cycle
+Be specific and factual. This is your memory — it helps you maintain continuity.`
+
+		messages = append(messages, ChatMessage{Role: "user", Content: reflectionPrompt})
+		reflResult, reflErr := c.Rally.ChatLLM(ctx, ChatLLMRequest{
+			ModelRef: modelRef, Messages: messages, Tools: nil, MaxTokens: 500,
+		})
+		if reflErr == nil && reflResult.Message.Content != "" {
+			_ = c.Rally.StoreMemory(ctx, "episodic", reflResult.Message.Content, map[string]any{
+				"cycle":      c.CycleCount,
+				"tool_calls": totalToolCalls,
+			})
+			slog.Info("cycle: reflection stored", "content", truncate(reflResult.Message.Content, 200))
+		}
+	} else {
+		_ = c.Rally.StoreMemory(ctx, "episodic",
+			fmt.Sprintf("Cycle %d: No actions taken.", c.CycleCount),
+			map[string]any{"cycle": c.CycleCount})
+	}
 
 	return nil
 }
@@ -136,14 +182,14 @@ done:
 // buildContext assembles the system prompt from the agent's full context.
 // This is the "who am I, where do I work, what am I doing" document.
 // The LLM makes all decisions from this context — no hardcoded logic.
-func (c *AgentCycle) buildContext(obs *Observations, sessionState string) string {
+func (c *AgentCycle) buildContext(obs *Observations, soulMD, sessionState string) string {
 	var sb strings.Builder
 
 	// Identity.
 	sb.WriteString(fmt.Sprintf("You are %s, the %s at %s.\n\n", c.AEName, c.AERole, obs.Company.Name))
 
-	if c.SoulMD != "" {
-		sb.WriteString(c.SoulMD)
+	if soulMD != "" {
+		sb.WriteString(soulMD)
 		sb.WriteString("\n\n")
 	}
 
@@ -175,6 +221,15 @@ func (c *AgentCycle) buildContext(obs *Observations, sessionState string) string
 		sb.WriteString("\n")
 	}
 
+	// Flag new team members (AEs created in the last 10 minutes).
+	// This helps existing AEs welcome newcomers.
+	for _, m := range obs.Team {
+		if m.Type == "ae" && m.Name != c.AEName+" ("+c.AERole+")" {
+			// Include all AEs in the team section — the LLM will notice new ones
+			// compared to its session state / memories.
+		}
+	}
+
 	// Pending hire proposals.
 	if len(obs.ProposedHires) > 0 {
 		sb.WriteString("## Pending Hire Proposals (awaiting human approval)\n")
@@ -191,17 +246,24 @@ func (c *AgentCycle) buildContext(obs *Observations, sessionState string) string
 		sb.WriteString("\n\n")
 	}
 
-	// How to work — generic, applicable to any role.
+	// How to work — applicable to any role.
 	sb.WriteString(`## How to Work
-- Review your current state and what's new before acting.
-- If you have in_progress work items, continue them. Don't start new things until current work is done.
-- If you have new messages, tasks, or Slack mentions, address them.
-- If nothing is urgent, check your backlog for the next priority item.
-- Track your progress: use BacklogAdd to break down work, BacklogUpdate to mark progress.
+You are an AI employee. You take action using your tools — you don't schedule meetings,
+you don't say "I'll get back to you", you don't pretend to be human. You DO things.
+
+- When someone asks you to hire someone, use ProposeHire immediately.
+- When someone asks a question, answer it directly on Slack.
+- Use your tools. Every cycle, act on what's in front of you.
+- Use Remember to store important decisions and things you've said, so you stay consistent.
+- Track your progress: BacklogAdd to break down work, BacklogUpdate to mark progress.
 - Mark assigned tasks done with UpdateTask when complete.
-- Write to /home/ae/scratch/session_state.md at the end of each cycle to capture what you did and what to follow up on next cycle.
-- When done for this cycle, respond with a brief text summary.
-- If blocked, use Escalate. If you need a colleague's input, use SendMessage.
+- If blocked, use Escalate. If you need a colleague's help, use SendMessage or Delegate.
+- Be concise on Slack. No emoji spam, no corporate speak. Just be direct and helpful.
+
+IMPORTANT:
+- Do NOT post status updates to Slack when you have nothing to do. Only post when you have something meaningful to say — a response to someone, a result, or important news.
+- If there's nothing to act on this cycle, just end with a brief internal summary. Do NOT post to Slack.
+- When you finish a cycle with no actions, just say "Nothing to do" — don't broadcast it.
 `)
 
 	return sb.String()
@@ -245,17 +307,15 @@ func (c *AgentCycle) buildSituation(obs *Observations) string {
 		sb.WriteString("\n")
 	}
 
-	// New Slack messages.
+	// Slack messages — shown with full text. Rally is the Slack gateway.
 	if len(obs.SlackEvents) > 0 {
-		sb.WriteString("### New Slack Messages\n")
+		sb.WriteString("### Slack Messages\n")
 		for _, evt := range obs.SlackEvents {
-			text := ""
-			if t, ok := evt.Payload["text"].(string); ok {
-				text = t
-			}
-			sb.WriteString(fmt.Sprintf("- [%s] %s in %s: %s\n", evt.EventType, evt.UserID, evt.Channel, text))
+			sb.WriteString(fmt.Sprintf("- %s in %s: \"%s\"\n", evt.UserID, evt.Channel, evt.Text))
 		}
-		sb.WriteString("\n")
+		// Tell the AE to reply to the SAME channel the messages came from.
+		lastChannel := obs.SlackEvents[len(obs.SlackEvents)-1].Channel
+		sb.WriteString(fmt.Sprintf("Reply using SlackSend with channel=\"%s\" to respond in the same conversation.\n\n", lastChannel))
 	}
 
 	// Messages from colleagues.
@@ -383,7 +443,7 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 		if channel == "" {
 			channel = "#general"
 		}
-		err := c.Rally.SendSlack(ctx, channel, fmt.Sprintf("[%s] %s", c.AEName, text))
+		err := c.Rally.SendSlack(ctx, channel, fmt.Sprintf("*%s:* %s", c.AEName, text))
 		if err != nil {
 			resultContent = fmt.Sprintf("Error: %s", err.Error())
 			isError = true
@@ -478,13 +538,29 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 			resultContent = string(data)
 		}
 
+	// --- Memory ---
+	case "Remember":
+		content, _ := tc.Input["content"].(string)
+		memType, _ := tc.Input["type"].(string)
+		if memType == "" {
+			memType = "reflection"
+		}
+		err := c.Rally.StoreMemory(ctx, memType, content, map[string]any{"source": "explicit"})
+		if err != nil {
+			resultContent = fmt.Sprintf("Error: %s", err.Error())
+			isError = true
+		} else {
+			resultContent = fmt.Sprintf(`{"status":"remembered","type":"%s"}`, memType)
+		}
+
 	// --- Hiring ---
 	case "ProposeHire":
 		role, _ := tc.Input["role"].(string)
 		dept, _ := tc.Input["department"].(string)
 		rationale, _ := tc.Input["rationale"].(string)
 		reportsTo, _ := tc.Input["reports_to"].(string)
-		data, err := c.Rally.ProposeHire(ctx, role, dept, rationale, reportsTo)
+		channel, _ := tc.Input["channel"].(string)
+		data, err := c.Rally.ProposeHire(ctx, role, dept, rationale, reportsTo, channel)
 		if err != nil {
 			resultContent = fmt.Sprintf("Error: %s", err.Error())
 			isError = true
@@ -599,4 +675,17 @@ func microcompact(messages []ChatMessage, keepLast ...int) []ChatMessage {
 	}
 
 	return compacted
+}
+
+// unique returns a deduplicated slice preserving order.
+func unique(s []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, v := range s {
+		if !seen[v] {
+			seen[v] = true
+			result = append(result, v)
+		}
+	}
+	return result
 }

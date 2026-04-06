@@ -155,7 +155,10 @@ func (h *SlackHandler) Events(w http.ResponseWriter, r *http.Request) {
 			companyID = companies[len(companies)-1].ID // oldest (ListCompanies is DESC)
 		}
 
-		if err := h.insertSlackEvent(r, evt.Type, channel, userID, threadTS, ts, companyID, payloadMap); err != nil {
+		// Generate event ID once — used for both DB insert and job reference.
+		eventID := newID()
+
+		if err := h.insertSlackEvent(r, eventID, evt.Type, channel, userID, threadTS, ts, evt.Text, companyID, payloadMap); err != nil {
 			log.Printf("slack: insert event: %v", err)
 		}
 
@@ -170,7 +173,6 @@ func (h *SlackHandler) Events(w http.ResponseWriter, r *http.Request) {
 					log.Printf("slack: enqueue member_join: %v", err)
 				}
 			case "message", "app_mention":
-				eventID := newID()
 				if _, err := queue.Client.Insert(r.Context(), queue.SlackEventJobArgs{
 					SlackEventID: eventID,
 					CompanyID:    companyID,
@@ -184,14 +186,14 @@ func (h *SlackHandler) Events(w http.ResponseWriter, r *http.Request) {
 	log.Printf("slack: received %s event channel=%s user=%s ts=%s", evt.Type, channel, userID, ts)
 }
 
-func (h *SlackHandler) insertSlackEvent(r *http.Request, eventType, channel, userID, threadTS, messageTS, companyID string, payload map[string]any) error {
+func (h *SlackHandler) insertSlackEvent(r *http.Request, id, eventType, channel, userID, threadTS, messageTS, text, companyID string, payload map[string]any) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
 	_, err = h.q().InsertSlackEvent(r.Context(), dao.InsertSlackEventParams{
-		ID:        newID(),
+		ID:        id,
 		CompanyID: companyID,
 		EventType: eventType,
 		Channel:   db.Ref(channel),
@@ -199,6 +201,7 @@ func (h *SlackHandler) insertSlackEvent(r *http.Request, eventType, channel, use
 		ThreadTs:  db.Ref(threadTS),
 		MessageTs: db.Ref(messageTS),
 		Payload:   payloadJSON,
+		Text:      db.Ref(text),
 	})
 	return err
 }

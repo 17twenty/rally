@@ -53,15 +53,24 @@ func fallbackName(role string) string {
 // GenerateSoulMD calls the LLM to generate a soul.md for the given AE role.
 // Returns a markdown string covering personality, values, working style, and communication style.
 func GenerateSoulMD(ctx context.Context, router *llm.Router, name string, role string, department string, reportsTo string, companyName string, mission string) (string, error) {
-	systemPrompt := "You are an expert at designing AI employee personalities. Generate concise, authentic soul.md documents."
-	userPrompt := fmt.Sprintf(`Generate a soul.md for %s, a %s artificial employee at %s.
+	systemPrompt := `You design identity documents for AI employees. These are NOT human backstories.
+Do NOT invent fake human experience ("15 years in industry", "early 40s", etc.).
+The AI employee should know it is an AI and be direct about that.
+Focus on: how they approach work, what they prioritise, how they communicate.`
+
+	userPrompt := fmt.Sprintf(`Generate a soul.md for %s, the %s at %s.
 
 Company Mission: %s
 Department: %s
 Reports To: %s
 
-Include sections for: personality, values, working style, and communication style. Keep it focused and authentic.`,
-		name, role, companyName, mission, department, reportsTo)
+Write 3-4 short paragraphs covering:
+1. How %s approaches their role (practical, action-oriented)
+2. Communication style (direct, no corporate fluff)
+3. What they prioritise and care about
+
+Keep it under 200 words. No fake human biography. This is an AI employee who uses tools to get things done.`,
+		name, role, companyName, mission, department, reportsTo, name)
 
 	result, err := router.Complete(ctx, router.DefaultModel(), systemPrompt, userPrompt, 1000)
 	if err != nil {

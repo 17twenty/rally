@@ -211,14 +211,14 @@ func (w *SlackEventWorker) Work(ctx context.Context, job *river.Job[SlackEventJo
 	// 5. Enqueue HeartbeatJobArgs for each target AE.
 	targetIDs := make([]string, 0, len(targets))
 	for _, emp := range targets {
+		// Insert immediate heartbeat with NO unique constraint.
+		// The regular heartbeat scheduler uses dedup, but Slack-triggered
+		// wakes must bypass it to ensure fast response times.
 		_, err := rc.Insert(ctx, HeartbeatJobArgs{
 			EmployeeID: emp.ID,
 			CompanyID:  job.Args.CompanyID,
 		}, &river.InsertOpts{
-			UniqueOpts: river.UniqueOpts{
-				ByArgs:   true,
-				ByPeriod: 60 * time.Second,
-			},
+			ScheduledAt: time.Now(),
 		})
 		if err != nil {
 			return fmt.Errorf("enqueue heartbeat for %s: %w", emp.ID, err)

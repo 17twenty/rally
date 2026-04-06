@@ -112,8 +112,10 @@ func (c *SlackClient) PostMessage(ctx context.Context, channel, text string) (st
 
 // PostMessageAsPersona prepends a [PersonaName] prefix per SLACK_NOTES §4.1.
 func (c *SlackClient) PostMessageAsPersona(ctx context.Context, channel, text, personaName string) (string, error) {
-	prefixed := fmt.Sprintf("[%s] %s", personaName, text)
-	return c.PostMessage(ctx, channel, prefixed)
+	if personaName != "" {
+		text = fmt.Sprintf("*%s:* %s", personaName, text)
+	}
+	return c.PostMessage(ctx, channel, text)
 }
 
 // ReplyInThread posts a message into an existing thread.
@@ -221,6 +223,76 @@ func (c *SlackClient) GetChannelByName(ctx context.Context, name string) (*Chann
 		}
 	}
 	return nil, nil
+}
+
+// ChannelMessage represents a single message from conversations.history.
+type ChannelMessage struct {
+	User    string `json:"user"`
+	Text    string `json:"text"`
+	TS      string `json:"ts"`
+	Type    string `json:"type"`
+	BotID   string `json:"bot_id,omitempty"`
+	SubType string `json:"subtype,omitempty"`
+}
+
+// ReadChannel fetches recent messages from a channel via conversations.history.
+func (c *SlackClient) ReadChannel(ctx context.Context, channel string, limit int) ([]ChannelMessage, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	var result struct {
+		OK       bool             `json:"ok"`
+		Error    string           `json:"error,omitempty"`
+		Messages []ChannelMessage `json:"messages"`
+	}
+	url := fmt.Sprintf("%s/conversations.history?channel=%s&limit=%d", slackAPIBase, channel, limit)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if !result.OK {
+		return nil, fmt.Errorf("slack: conversations.history: %s", result.Error)
+	}
+	return result.Messages, nil
+}
+
+// ReadThread fetches replies in a thread via conversations.replies.
+func (c *SlackClient) ReadThread(ctx context.Context, channel, threadTS string, limit int) ([]ChannelMessage, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	var result struct {
+		OK       bool             `json:"ok"`
+		Error    string           `json:"error,omitempty"`
+		Messages []ChannelMessage `json:"messages"`
+	}
+	url := fmt.Sprintf("%s/conversations.replies?channel=%s&ts=%s&limit=%d", slackAPIBase, channel, threadTS, limit)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if !result.OK {
+		return nil, fmt.Errorf("slack: conversations.replies: %s", result.Error)
+	}
+	return result.Messages, nil
 }
 
 // AddReaction adds an emoji reaction to a message.

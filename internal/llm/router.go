@@ -205,8 +205,9 @@ func (r *Router) getToolProvider(providerID string) ToolUseProvider {
 	if !ok {
 		return nil
 	}
-	// Wrap basic ProviderClient with fallback tool-use.
-	// TODO: detect native tool-use capability and use it when available.
+	// Wrap basic ProviderClient with fallback tool-use for providers
+	// that don't have native tool-use registered (SDK providers register
+	// themselves as ToolUseProvider in NewRouter).
 	tp := &FallbackToolUseProvider{Client: client}
 	r.toolProviders[providerID] = tp
 	return tp

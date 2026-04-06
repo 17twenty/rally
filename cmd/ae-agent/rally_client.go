@@ -85,7 +85,8 @@ func (c *RallyClient) Heartbeat(ctx context.Context, cycle int) error {
 type Observations struct {
 	Company       CompanyObs        `json:"company"`
 	Team          []TeamMemberObs   `json:"team"`
-	ModelRef      string            `json:"model_ref"` // server-side model override
+	ModelRef      string            `json:"model_ref"`  // server-side model override
+	SoulMD        string            `json:"soul_md"`    // identity from DB (single source of truth)
 	SlackEvents   []SlackEventObs   `json:"slack_events"`
 	Memories      []MemoryObs       `json:"memories"`
 	Tasks         []TaskObs         `json:"tasks"`
@@ -130,15 +131,14 @@ type AEMessageObs struct {
 	Message string `json:"message"`
 }
 
-// SlackEventObs is a Slack event returned by the observations endpoint.
+// SlackEventObs is a Slack message from the observations endpoint.
+// Rally is the Slack gateway — AEs see message text directly, no API calls needed.
 type SlackEventObs struct {
-	ID        string         `json:"id"`
-	EventType string         `json:"event_type"`
-	Channel   string         `json:"channel"`
-	UserID    string         `json:"user_id"`
-	Text      string         `json:"text"`
-	ThreadTS  string         `json:"thread_ts"`
-	Payload   map[string]any `json:"payload"`
+	Channel  string `json:"channel"`
+	UserID   string `json:"user_id"`
+	Text     string `json:"text"`
+	ThreadTS string `json:"thread_ts"`
+	TS       string `json:"ts"`
 }
 
 // MemoryObs is a memory event returned by the observations endpoint.
@@ -387,9 +387,9 @@ func (c *RallyClient) UpdateTaskStatus(ctx context.Context, taskID, status, note
 }
 
 // ProposeHire proposes a new team member to be hired.
-func (c *RallyClient) ProposeHire(ctx context.Context, role, department, rationale, reportsTo string) ([]byte, error) {
+func (c *RallyClient) ProposeHire(ctx context.Context, role, department, rationale, reportsTo, channel string) ([]byte, error) {
 	return c.do(ctx, "POST", "/api/ae/propose-hire", map[string]string{
-		"role": role, "department": department, "rationale": rationale, "reports_to": reportsTo,
+		"role": role, "department": department, "rationale": rationale, "reports_to": reportsTo, "channel": channel,
 	})
 }
 

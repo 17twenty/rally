@@ -22,7 +22,7 @@ SELECT COUNT(*) FROM companies;
 SELECT COALESCE(policy_doc, '') as policy_doc FROM companies WHERE id = $1;
 
 -- name: UpdateSlackTeam :exec
-UPDATE companies SET slack_team_id = $2, slack_team_name = $3 WHERE id = $1;
+UPDATE companies SET slack_team_id = $2, slack_team_name = $3, slack_bot_user_id = $4 WHERE id = $1;
 
 -- name: ListCompaniesByName :many
 SELECT * FROM companies ORDER BY name;

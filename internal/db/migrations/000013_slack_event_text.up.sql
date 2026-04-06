@@ -1,0 +1,2 @@
+ALTER TABLE slack_events ADD COLUMN IF NOT EXISTS text TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS slack_bot_user_id TEXT;

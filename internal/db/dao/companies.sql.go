@@ -21,7 +21,7 @@ func (q *Queries) CountCompanies(ctx context.Context) (int64, error) {
 }
 
 const getCompany = `-- name: GetCompany :one
-SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name FROM companies WHERE id = $1
+SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name, slack_bot_user_id FROM companies WHERE id = $1
 `
 
 func (q *Queries) GetCompany(ctx context.Context, id string) (Company, error) {
@@ -36,6 +36,7 @@ func (q *Queries) GetCompany(ctx context.Context, id string) (Company, error) {
 		&i.PolicyDoc,
 		&i.SlackTeamID,
 		&i.SlackTeamName,
+		&i.SlackBotUserID,
 	)
 	return i, err
 }
@@ -54,7 +55,7 @@ func (q *Queries) GetCompanyPolicy(ctx context.Context, id string) (string, erro
 const insertCompany = `-- name: InsertCompany :one
 INSERT INTO companies (id, name, mission, status)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name
+RETURNING id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name, slack_bot_user_id
 `
 
 type InsertCompanyParams struct {
@@ -81,12 +82,13 @@ func (q *Queries) InsertCompany(ctx context.Context, arg InsertCompanyParams) (C
 		&i.PolicyDoc,
 		&i.SlackTeamID,
 		&i.SlackTeamName,
+		&i.SlackBotUserID,
 	)
 	return i, err
 }
 
 const listCompanies = `-- name: ListCompanies :many
-SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name FROM companies ORDER BY created_at DESC
+SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name, slack_bot_user_id FROM companies ORDER BY created_at DESC
 `
 
 func (q *Queries) ListCompanies(ctx context.Context) ([]Company, error) {
@@ -107,6 +109,7 @@ func (q *Queries) ListCompanies(ctx context.Context) ([]Company, error) {
 			&i.PolicyDoc,
 			&i.SlackTeamID,
 			&i.SlackTeamName,
+			&i.SlackBotUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -119,7 +122,7 @@ func (q *Queries) ListCompanies(ctx context.Context) ([]Company, error) {
 }
 
 const listCompaniesByName = `-- name: ListCompaniesByName :many
-SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name FROM companies ORDER BY name
+SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name, slack_bot_user_id FROM companies ORDER BY name
 `
 
 func (q *Queries) ListCompaniesByName(ctx context.Context) ([]Company, error) {
@@ -140,6 +143,7 @@ func (q *Queries) ListCompaniesByName(ctx context.Context) ([]Company, error) {
 			&i.PolicyDoc,
 			&i.SlackTeamID,
 			&i.SlackTeamName,
+			&i.SlackBotUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -180,16 +184,22 @@ func (q *Queries) UpdateCompanyStatus(ctx context.Context, arg UpdateCompanyStat
 }
 
 const updateSlackTeam = `-- name: UpdateSlackTeam :exec
-UPDATE companies SET slack_team_id = $2, slack_team_name = $3 WHERE id = $1
+UPDATE companies SET slack_team_id = $2, slack_team_name = $3, slack_bot_user_id = $4 WHERE id = $1
 `
 
 type UpdateSlackTeamParams struct {
-	ID            string  `json:"id"`
-	SlackTeamID   *string `json:"slack_team_id"`
-	SlackTeamName *string `json:"slack_team_name"`
+	ID             string  `json:"id"`
+	SlackTeamID    *string `json:"slack_team_id"`
+	SlackTeamName  *string `json:"slack_team_name"`
+	SlackBotUserID *string `json:"slack_bot_user_id"`
 }
 
 func (q *Queries) UpdateSlackTeam(ctx context.Context, arg UpdateSlackTeamParams) error {
-	_, err := q.db.Exec(ctx, updateSlackTeam, arg.ID, arg.SlackTeamID, arg.SlackTeamName)
+	_, err := q.db.Exec(ctx, updateSlackTeam,
+		arg.ID,
+		arg.SlackTeamID,
+		arg.SlackTeamName,
+		arg.SlackBotUserID,
+	)
 	return err
 }
