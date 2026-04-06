@@ -140,6 +140,7 @@ tasks:
           DELETE FROM work_item_history;
           DELETE FROM work_items;
           DELETE FROM ae_messages;
+          DELETE FROM proposed_hires;
           DELETE FROM ae_api_tokens;
           DELETE FROM tool_logs;
           DELETE FROM memory_events;
@@ -152,6 +153,10 @@ tasks:
           DELETE FROM river_job;
           DELETE FROM employees;
           DELETE FROM knowledgebase;
+          DELETE FROM company_financials;
+          DELETE FROM workspace_comments;
+          DELETE FROM workspace_versions;
+          DELETE FROM workspace_files;
           DELETE FROM companies;
         "
       - echo "All data nuked. Visit /setup to start fresh."

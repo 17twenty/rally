@@ -88,6 +88,7 @@ func main() {
 	}); err != nil {
 		log.Fatalf("queue.InitQueue: %v", err)
 	}
+	slog.Info("job queue initialized", "client_nil", queue.Client == nil)
 
 	// Setup wizard (first-time bootstrap)
 	setupH := &handlers.SetupHandler{DB: database, Vault: credVault}

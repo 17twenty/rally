@@ -35,8 +35,11 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 	}
 	c.CycleCount++
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// Use 8-min timeout for tool loop, reserve 2 min for reflection.
+	parentCtx := ctx
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 	defer cancel()
+	_ = parentCtx // used for reflection after tool loop
 
 	// 1. Gather all context.
 	slog.Info("cycle: observe")
@@ -149,9 +152,10 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 	slog.Warn("cycle: hit max turns", "max_turns", maxTurns)
 
 done:
-	// 4. Generate cycle reflection via LLM — the agent summarises what it did,
-	// what it learned, and what to follow up on. This is stored as episodic memory
-	// and feeds back into future cycles via observations.
+	// 4. Generate cycle reflection via LLM with a fresh timeout (not the tool loop timeout).
+	reflCtx, reflCancel := context.WithTimeout(parentCtx, 2*time.Minute)
+	defer reflCancel()
+
 	if totalToolCalls > 0 || finalText != "" {
 		reflectionPrompt := `Summarise this cycle in 2-3 sentences for your future self. Include:
 - What you did (actions taken, messages sent)
@@ -160,18 +164,31 @@ done:
 Be specific and factual. This is your memory — it helps you maintain continuity.`
 
 		messages = append(messages, ChatMessage{Role: "user", Content: reflectionPrompt})
-		reflResult, reflErr := c.Rally.ChatLLM(ctx, ChatLLMRequest{
+		reflResult, reflErr := c.Rally.ChatLLM(reflCtx, ChatLLMRequest{
 			ModelRef: modelRef, Messages: messages, Tools: nil, MaxTokens: 500,
 		})
-		if reflErr == nil && reflResult.Message.Content != "" {
-			_ = c.Rally.StoreMemory(ctx, "episodic", reflResult.Message.Content, map[string]any{
-				"cycle":      c.CycleCount,
-				"tool_calls": totalToolCalls,
-			})
-			slog.Info("cycle: reflection stored", "content", truncate(reflResult.Message.Content, 200))
+		if reflErr != nil {
+			slog.Warn("cycle: reflection LLM failed, storing fallback", "err", reflErr)
+			fallback := fmt.Sprintf("Cycle %d: Used %s. %s",
+				c.CycleCount, strings.Join(unique(toolsUsed), ", "), truncate(finalText, 200))
+			if storeErr := c.Rally.StoreMemory(reflCtx, "episodic", fallback, map[string]any{
+				"cycle": c.CycleCount, "tool_calls": totalToolCalls,
+			}); storeErr != nil {
+				slog.Warn("cycle: StoreMemory failed", "err", storeErr)
+			}
+		} else if reflResult.Message.Content != "" {
+			if storeErr := c.Rally.StoreMemory(reflCtx, "episodic", reflResult.Message.Content, map[string]any{
+				"cycle": c.CycleCount, "tool_calls": totalToolCalls,
+			}); storeErr != nil {
+				slog.Warn("cycle: StoreMemory failed", "err", storeErr)
+			} else {
+				slog.Info("cycle: reflection stored", "content", truncate(reflResult.Message.Content, 200))
+			}
+		} else {
+			slog.Warn("cycle: reflection LLM returned empty")
 		}
 	} else {
-		_ = c.Rally.StoreMemory(ctx, "episodic",
+		_ = c.Rally.StoreMemory(reflCtx, "episodic",
 			fmt.Sprintf("Cycle %d: No actions taken.", c.CycleCount),
 			map[string]any{"cycle": c.CycleCount})
 	}
@@ -248,22 +265,34 @@ func (c *AgentCycle) buildContext(obs *Observations, soulMD, sessionState string
 
 	// How to work — applicable to any role.
 	sb.WriteString(`## How to Work
-You are an AI employee. You take action using your tools — you don't schedule meetings,
-you don't say "I'll get back to you", you don't pretend to be human. You DO things.
+You are an AI employee. You take action — you don't schedule meetings or pretend to be human.
 
-- When someone asks you to hire someone, use ProposeHire immediately.
-- When someone asks a question, answer it directly on Slack.
-- Use your tools. Every cycle, act on what's in front of you.
-- Use Remember to store important decisions and things you've said, so you stay consistent.
-- Track your progress: BacklogAdd to break down work, BacklogUpdate to mark progress.
-- Mark assigned tasks done with UpdateTask when complete.
-- If blocked, use Escalate. If you need a colleague's help, use SendMessage or Delegate.
-- Be concise on Slack. No emoji spam, no corporate speak. Just be direct and helpful.
+### Slack
+- Send ONE message per topic. Post the result, not each step.
+- Do NOT post status updates ("all systems nominal") to Slack. Ever.
+- If nothing to do, end silently. Do NOT post to Slack.
+- When tools like ProposeHire handle notifications, don't duplicate them.
 
-IMPORTANT:
-- Do NOT post status updates to Slack when you have nothing to do. Only post when you have something meaningful to say — a response to someone, a result, or important news.
-- If there's nothing to act on this cycle, just end with a brief internal summary. Do NOT post to Slack.
-- When you finish a cycle with no actions, just say "Nothing to do" — don't broadcast it.
+### Your Backlog (Work Items)
+- BacklogList: see your current work items
+- BacklogAdd: break down work into trackable items
+- BacklogUpdate: mark items in_progress, done, blocked, or cancelled
+- Check BacklogList BEFORE creating items — don't create duplicates.
+
+### Assigned Tasks (from others)
+- Tasks appear in your observations when someone delegates to you.
+- UpdateTask: mark them in_progress or done when complete.
+- The system auto-completes linked work items when you mark a task done.
+
+### Memory
+- Use Remember to store decisions, context, and things you've said.
+- Your reflections are automatically stored at cycle end.
+
+### Collaboration
+- Delegate: assign work to a colleague by role
+- SendMessage: quick question to a colleague
+- Escalate: flag something for human attention
+- ProposeHire: CEO only — propose new team members
 `)
 
 	return sb.String()

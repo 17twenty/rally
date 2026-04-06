@@ -225,6 +225,37 @@ func (c *SlackClient) GetChannelByName(ctx context.Context, name string) (*Chann
 	return nil, nil
 }
 
+// ResolveUserName looks up a user ID and returns their display name.
+func (c *SlackClient) ResolveUserName(ctx context.Context, userID string) string {
+	users, err := c.ListUsers(ctx)
+	if err != nil {
+		return userID
+	}
+	for _, u := range users {
+		if u.ID == userID {
+			if u.RealName != "" {
+				return u.RealName
+			}
+			return u.Name
+		}
+	}
+	return userID
+}
+
+// ResolveChannelName looks up a channel ID and returns "#name".
+func (c *SlackClient) ResolveChannelName(ctx context.Context, channelID string) string {
+	channels, err := c.ListChannels(ctx)
+	if err != nil {
+		return channelID
+	}
+	for _, ch := range channels {
+		if ch.ID == channelID {
+			return "#" + ch.Name
+		}
+	}
+	return channelID
+}
+
 // ChannelMessage represents a single message from conversations.history.
 type ChannelMessage struct {
 	User    string `json:"user"`

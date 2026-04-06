@@ -31,3 +31,12 @@ UPDATE work_items SET updated_at = now() WHERE id = $1;
 -- name: AddWorkItemHistory :exec
 INSERT INTO work_item_history (id, work_item_id, change_type, content, metadata)
 VALUES ($1, $2, $3, $4, $5);
+
+-- name: CheckDuplicateWorkItem :many
+SELECT id, title, status FROM work_items
+WHERE owner_id = $1 AND company_id = $2 AND title = $3 AND status NOT IN ('done', 'cancelled')
+LIMIT 1;
+
+-- name: CompleteWorkItemsBySourceTask :exec
+UPDATE work_items SET status = 'done', updated_at = now()
+WHERE source_task_id = $1 AND status != 'done';

@@ -130,20 +130,46 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 	// Fetch recent Slack messages, excluding bot's own messages.
 	// Rally is the Slack gateway — AEs see message text directly from the DB.
 	var slackEvents []slackEventObs
-	botUserID := "" // filter out bot's own messages
+	botUserID := ""
 	if c, cErr := h.q().GetCompany(ctx, companyID); cErr == nil {
 		botUserID = db.Deref(c.SlackBotUserID)
 	}
-	daoEvents, err := h.q().GetRecentSlackMessagesExcludingBot(ctx, dao.GetRecentSlackMessagesExcludingBotParams{
-		CompanyID: companyID,
-		UserID:    &botUserID,
-		Limit:     10,
-	})
-	if err == nil {
+	// Use bot-filtered query only if we have a real bot user ID.
+	// Otherwise fall back to unfiltered recent events.
+	var daoEvents []dao.GetRecentSlackMessagesExcludingBotRow
+	var slackErr error
+	if botUserID != "" {
+		daoEvents, slackErr = h.q().GetRecentSlackMessagesExcludingBot(ctx, dao.GetRecentSlackMessagesExcludingBotParams{
+			CompanyID: companyID, UserID: &botUserID, Limit: 10,
+		})
+	} else {
+		allEvents, allErr := h.q().GetRecentSlackEvents(ctx, dao.GetRecentSlackEventsParams{
+			CompanyID: companyID, Limit: 10,
+		})
+		if allErr == nil {
+			for _, e := range allEvents {
+				daoEvents = append(daoEvents, dao.GetRecentSlackMessagesExcludingBotRow{
+					ID: e.ID, EventType: e.EventType, Channel: db.Deref(e.Channel),
+					UserID: db.Deref(e.UserID), Text: db.Deref(e.Text),
+					ThreadTs: db.Deref(e.ThreadTs), MessageTs: db.Deref(e.MessageTs),
+				})
+			}
+		}
+		slackErr = allErr
+	}
+	if slackErr == nil {
+		// Resolve Slack IDs to human-readable names.
+		h.ensureSlackClient(ctx)
 		for _, e := range daoEvents {
+			userName := e.UserID
+			channelName := e.Channel
+			if h.SlackClient != nil {
+				userName = h.SlackClient.ResolveUserName(ctx, e.UserID)
+				channelName = h.SlackClient.ResolveChannelName(ctx, e.Channel)
+			}
 			slackEvents = append(slackEvents, slackEventObs{
-				Channel:  e.Channel,
-				UserID:   e.UserID,
+				Channel:  channelName,
+				UserID:   userName,
 				Text:     e.Text,
 				ThreadTS: e.ThreadTs,
 				TS:       e.MessageTs,
@@ -754,6 +780,19 @@ func (h *AEAPIHandler) BacklogAdd(w http.ResponseWriter, r *http.Request) {
 		req.Priority = "medium"
 	}
 
+	// Dedup: reject if same title+owner already exists and is not done.
+	existing, _ := h.q().CheckDuplicateWorkItem(ctx, dao.CheckDuplicateWorkItemParams{
+		OwnerID: employeeID, CompanyID: companyID, Title: req.Title,
+	})
+	if len(existing) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": existing[0].ID, "title": existing[0].Title, "status": existing[0].Status,
+			"note": "Work item already exists — reusing it.",
+		})
+		return
+	}
+
 	id := newID()
 	_, err := h.q().CreateWorkItem(ctx, dao.CreateWorkItemParams{
 		ID:           id,
@@ -1042,17 +1081,38 @@ func (h *AEAPIHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Auto-complete linked work items when task is marked done.
+	if req.Status == "done" {
+		_ = h.q().CompleteWorkItemsBySourceTask(ctx, &taskID)
+	}
+
 	slog.Info("ae_update_task", "employee_id", employeeID, "task_id", taskID, "status", req.Status)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"id": taskID, "status": req.Status})
 }
 
-// ProposeHire handles POST /api/ae/propose-hire — AE proposes a new team member.
+// ProposeHire handles POST /api/ae/propose-hire — only the CEO can propose hires.
+// Other AEs should use SendMessage or Delegate to request the CEO to hire.
 func (h *AEAPIHandler) ProposeHire(w http.ResponseWriter, r *http.Request) {
 	employeeID := r.Header.Get("X-AE-Employee-ID")
 	companyID := r.Header.Get("X-AE-Company-ID")
 	ctx := r.Context()
+
+	// Only CEO can propose hires. Other AEs must ask the CEO.
+	emp, empErr := h.q().GetEmployee(ctx, employeeID)
+	if empErr != nil {
+		http.Error(w, `{"error":"employee not found"}`, http.StatusNotFound)
+		return
+	}
+	if emp.Role != "CEO" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "Only the CEO can propose hires. Use SendMessage to ask the CEO to hire for you.",
+		})
+		return
+	}
 
 	var req struct {
 		Role       string `json:"role"`
@@ -1068,6 +1128,19 @@ func (h *AEAPIHandler) ProposeHire(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "" {
 		http.Error(w, `{"error":"role is required"}`, http.StatusBadRequest)
 		return
+	}
+
+	// Reject duplicate proposals — check if this role is already pending or approved.
+	existingHires, _ := h.q().ListProposedHiresByCompany(ctx, companyID)
+	for _, eh := range existingHires {
+		if strings.EqualFold(eh.Role, req.Role) && (eh.Status == "pending" || eh.Status == "approved") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("A %s hire is already %s.", req.Role, eh.Status),
+			})
+			return
+		}
 	}
 
 	hire, err := h.q().InsertProposedHire(ctx, dao.InsertProposedHireParams{
@@ -1185,15 +1258,23 @@ func (h *AEAPIHandler) ApproveHire(w http.ResponseWriter, r *http.Request) {
 		ReviewedBy: db.Ref("human"),
 	})
 
-	// Enqueue a hiring job.
+	// Enqueue a hiring job — or hire directly if queue isn't available.
+	planRoleID := strings.ToLower(strings.ReplaceAll(hire.Role, " ", "-")) + "-ae"
 	if queue.Client != nil {
-		_, _ = queue.Client.Insert(ctx, queue.HiringJobArgs{
+		_, insertErr := queue.Client.Insert(ctx, queue.HiringJobArgs{
 			CompanyID:  hire.CompanyID,
-			PlanRoleID: strings.ToLower(strings.ReplaceAll(hire.Role, " ", "-")) + "-ae",
+			PlanRoleID: planRoleID,
 			Role:       hire.Role,
 			Department: db.Deref(hire.Department),
 			ReportsTo:  db.Deref(hire.ReportsTo),
 		}, nil)
+		if insertErr != nil {
+			slog.Warn("approve_hire: queue insert failed, will try direct hiring", "err", insertErr)
+		} else {
+			slog.Info("approve_hire: hiring job enqueued", "role", hire.Role)
+		}
+	} else {
+		slog.Warn("approve_hire: queue.Client is nil — this should not happen. Check InitQueue.")
 	}
 
 	slog.Info("approve_hire", "hire_id", hireID, "role", hire.Role)

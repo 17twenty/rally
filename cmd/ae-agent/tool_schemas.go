@@ -295,7 +295,7 @@ func localToolDefs() []ToolDefinition {
 		// --- Hiring ---
 		{
 			Name:        "ProposeHire",
-			Description: "Propose a new team member to be hired. The proposal will be reviewed by human leadership. An approval link will be posted to the specified Slack channel.",
+			Description: "CEO ONLY: Propose a new team member to be hired. Only the CEO can use this tool. If you are not the CEO, use SendMessage to ask the CEO to hire for you. The proposal will be reviewed by human leadership.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -31,8 +31,23 @@ type Hirer struct {
 // HireAE runs the full hiring flow for a single planned role:
 // generates soul.md, inserts DB rows, provisions Slack, posts introduction.
 func (h *Hirer) HireAE(ctx context.Context, companyID string, plan org.PlannedRole, company domain.Company) (*domain.Employee, error) {
-	// 1. Generate AE name
-	aeName, err := GenerateAEName(ctx, h.LLMRouter, plan.Role, company.Name)
+	// 1. Generate unique AE name
+	var existingNames []string
+	nameRows, _ := h.DB.Query(ctx, `SELECT name FROM employees WHERE company_id = $1 AND type = 'ae'`, companyID)
+	if nameRows != nil {
+		for nameRows.Next() {
+			var n string
+			if nameRows.Scan(&n) == nil {
+				// Extract first name from "Alex (CEO)" → "Alex"
+				if idx := strings.Index(n, " ("); idx > 0 {
+					n = n[:idx]
+				}
+				existingNames = append(existingNames, n)
+			}
+		}
+		nameRows.Close()
+	}
+	aeName, err := GenerateAEName(ctx, h.LLMRouter, plan.Role, company.Name, existingNames)
 	if err != nil {
 		aeName = fallbackName(plan.Role)
 	}
@@ -90,7 +105,17 @@ func (h *Hirer) HireAE(ctx context.Context, companyID string, plan org.PlannedRo
 		return nil, fmt.Errorf("insert employee_config: %w", err)
 	}
 
-	// 4. Insert org_structure row
+	// 4. Create onboarding task from hire rationale.
+	if plan.Rationale != "" {
+		taskID := fmt.Sprintf("task-onboard-%s", employeeID)
+		_, _ = h.DB.Exec(ctx,
+			`INSERT INTO tasks (id, company_id, title, description, assignee_id, status)
+			 VALUES ($1, $2, $3, $4, $5, 'open')`,
+			taskID, companyID, fmt.Sprintf("Onboarding: %s", plan.Role), plan.Rationale, employeeID)
+		slog.Info("hiring: onboarding task created", "role", plan.Role, "task_id", taskID)
+	}
+
+	// 5. Insert org_structure row
 	orgID := fmt.Sprintf("org-%s", employeeID)
 	_, err = h.DB.Exec(ctx,
 		`INSERT INTO org_structure (id, company_id, employee_id, reports_to, department) VALUES ($1, $2, $3, $4, $5)`,

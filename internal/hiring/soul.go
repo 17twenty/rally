@@ -8,22 +8,53 @@ import (
 	"github.com/17twenty/rally/internal/llm"
 )
 
-// GenerateAEName calls the LLM to generate a short human first name for the AE.
-// Falls back to a role-based default if the LLM fails or returns an invalid result.
-func GenerateAEName(ctx context.Context, router *llm.Router, role string, companyName string) (string, error) {
+// GenerateAEName calls the LLM to generate a unique short human first name for the AE.
+// existingNames is a list of names already in use — the generated name must not collide.
+func GenerateAEName(ctx context.Context, router *llm.Router, role string, companyName string, existingNames []string) (string, error) {
+	avoidList := ""
+	if len(existingNames) > 0 {
+		avoidList = fmt.Sprintf(" Do NOT use any of these names: %s.", strings.Join(existingNames, ", "))
+	}
+
 	systemPrompt := "You are a naming assistant. Respond with a single word only."
-	userPrompt := fmt.Sprintf("Generate a single short human first name (one word only, no explanation) for an AI employee with the role of %s at %s. The name should feel approachable and professional. Respond with just the name.", role, companyName)
+	userPrompt := fmt.Sprintf("Generate a single short human first name (one word only, no explanation) for an AI employee with the role of %s at %s.%s Respond with just the name.", role, companyName, avoidList)
 
 	result, err := router.Complete(ctx, router.DefaultModel(), systemPrompt, userPrompt, 10)
 	if err == nil {
 		name := strings.TrimSpace(result)
 		if name != "" && !strings.Contains(name, " ") {
+			// Verify uniqueness
+			nameLower := strings.ToLower(name)
+			for _, existing := range existingNames {
+				if strings.ToLower(existing) == nameLower {
+					// Collision — try fallback with suffix
+					return name + "2", nil
+				}
+			}
 			return name, nil
 		}
 	}
 
-	// Fallback names by role
-	return fallbackName(role), nil
+	// Fallback: generate a unique name from role
+	base := fallbackName(role)
+	for i := 0; i < 10; i++ {
+		candidate := base
+		if i > 0 {
+			candidate = fmt.Sprintf("%s%d", base, i+1)
+		}
+		unique := true
+		for _, existing := range existingNames {
+			if strings.EqualFold(existing, candidate) {
+				unique = false
+				break
+			}
+		}
+		if unique {
+			return candidate, nil
+		}
+	}
+
+	return base + fmt.Sprintf("%d", len(existingNames)+1), nil
 }
 
 // fallbackName returns a default first name for the given role.

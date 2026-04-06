@@ -195,7 +195,12 @@ func (w *SlackEventWorker) Work(ctx context.Context, job *river.Job[SlackEventJo
 			targets = slack.MatchAEsByRole(employees, mentions)
 		}
 
-		// Channel-based routing if no mention matches.
+		// Try name-based routing — "Hey Drew" matches Drew.
+		if len(targets) == 0 {
+			targets = slack.MatchAEsByName(employees, text)
+		}
+
+		// Channel-based routing if no name or mention matches.
 		if len(targets) == 0 && channel != nil {
 			channelName := strings.TrimPrefix(*channel, "#")
 			roles := slack.ChannelToRoles(channelName)

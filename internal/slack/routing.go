@@ -50,6 +50,36 @@ func MatchAEsByRole(employees []domain.Employee, roles []string) []domain.Employ
 	return matched
 }
 
+// MatchAEsByName scans message text for any AE's first name OR role (case-insensitive).
+// This handles "Hey Drew" and "Hey Go Engineer" style messages.
+func MatchAEsByName(employees []domain.Employee, text string) []domain.Employee {
+	lower := strings.ToLower(text)
+	var matched []domain.Employee
+	seen := make(map[string]bool)
+	for _, emp := range employees {
+		if emp.Type != "ae" {
+			continue
+		}
+		// Check first name: "Drew (Go Developer)" → "Drew"
+		name := emp.Name
+		if idx := strings.Index(name, " ("); idx > 0 {
+			name = name[:idx]
+		}
+		name = strings.Split(name, " ")[0]
+		if name != "" && len(name) >= 3 && strings.Contains(lower, strings.ToLower(name)) && !seen[emp.ID] {
+			seen[emp.ID] = true
+			matched = append(matched, emp)
+			continue
+		}
+		// Check role: "Go Engineer", "Chief Marketing Officer"
+		if emp.Role != "" && len(emp.Role) >= 3 && strings.Contains(lower, strings.ToLower(emp.Role)) && !seen[emp.ID] {
+			seen[emp.ID] = true
+			matched = append(matched, emp)
+		}
+	}
+	return matched
+}
+
 // ChannelToRoles maps a Slack channel name to the relevant AE role prefixes.
 func ChannelToRoles(channel string) []string {
 	switch strings.ToLower(channel) {

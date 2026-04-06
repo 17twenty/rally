@@ -36,6 +36,54 @@ func (q *Queries) AddWorkItemHistory(ctx context.Context, arg AddWorkItemHistory
 	return err
 }
 
+const checkDuplicateWorkItem = `-- name: CheckDuplicateWorkItem :many
+SELECT id, title, status FROM work_items
+WHERE owner_id = $1 AND company_id = $2 AND title = $3 AND status NOT IN ('done', 'cancelled')
+LIMIT 1
+`
+
+type CheckDuplicateWorkItemParams struct {
+	OwnerID   string `json:"owner_id"`
+	CompanyID string `json:"company_id"`
+	Title     string `json:"title"`
+}
+
+type CheckDuplicateWorkItemRow struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+func (q *Queries) CheckDuplicateWorkItem(ctx context.Context, arg CheckDuplicateWorkItemParams) ([]CheckDuplicateWorkItemRow, error) {
+	rows, err := q.db.Query(ctx, checkDuplicateWorkItem, arg.OwnerID, arg.CompanyID, arg.Title)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CheckDuplicateWorkItemRow{}
+	for rows.Next() {
+		var i CheckDuplicateWorkItemRow
+		if err := rows.Scan(&i.ID, &i.Title, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const completeWorkItemsBySourceTask = `-- name: CompleteWorkItemsBySourceTask :exec
+UPDATE work_items SET status = 'done', updated_at = now()
+WHERE source_task_id = $1 AND status != 'done'
+`
+
+func (q *Queries) CompleteWorkItemsBySourceTask(ctx context.Context, sourceTaskID *string) error {
+	_, err := q.db.Exec(ctx, completeWorkItemsBySourceTask, sourceTaskID)
+	return err
+}
+
 const createWorkItem = `-- name: CreateWorkItem :one
 INSERT INTO work_items (id, parent_id, company_id, owner_id, title, description, status, priority, source_task_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
