@@ -42,6 +42,9 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 	defer cancel()
 	_ = parentCtx // used for reflection after tool loop
 
+	// Refresh credentials each cycle (picks up tokens added after container start).
+	setupCredentials(ctx, c.Rally, c.AEName)
+
 	// Load persisted high-water mark if we don't have one yet (e.g. container restart).
 	if c.LastSlackTS == "" {
 		if ts, err := os.ReadFile(filepath.Join(c.ScratchPath, ".slack_hwm")); err == nil {
@@ -114,7 +117,7 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 		soul = c.SoulMD
 	}
 
-	systemPrompt := c.buildContext(obs, soul, sessionState)
+	systemPrompt := c.buildContext(ctx, obs, soul, sessionState)
 	userPrompt := c.buildSituation(obs)
 
 	messages := []ChatMessage{
@@ -254,7 +257,7 @@ Be specific and factual. This is your memory — it helps you maintain continuit
 // buildContext assembles the system prompt from the agent's full context.
 // This is the "who am I, where do I work, what am I doing" document.
 // The LLM makes all decisions from this context — no hardcoded logic.
-func (c *AgentCycle) buildContext(obs *Observations, soulMD, sessionState string) string {
+func (c *AgentCycle) buildContext(ctx context.Context, obs *Observations, soulMD, sessionState string) string {
 	var sb strings.Builder
 
 	// Identity.
@@ -270,8 +273,29 @@ func (c *AgentCycle) buildContext(obs *Observations, soulMD, sessionState string
 	sb.WriteString(fmt.Sprintf("- Company: %s — %s\n", obs.Company.Name, obs.Company.Mission))
 	sb.WriteString(fmt.Sprintf("- Date: %s\n", time.Now().Format("2006-01-02 15:04")))
 	sb.WriteString(fmt.Sprintf("- Heartbeat: cycle #%d\n", c.CycleCount))
-	sb.WriteString("- Workspace: /workspace (shared with all team members)\n")
-	sb.WriteString("- Scratch: /home/ae/scratch (your private working space)\n\n")
+	sb.WriteString("- Workspace: /workspace (shared with all team members — clone repos here)\n")
+	sb.WriteString("- Scratch: /home/ae/scratch (your private working space)\n")
+
+	// Show available credentials so the AE knows what integrations it has.
+	if creds, err := c.Rally.ListCredentials(ctx); err == nil {
+		var credResult struct {
+			Credentials []struct {
+				Provider string `json:"provider"`
+				Status   string `json:"status"`
+			} `json:"credentials"`
+		}
+		if json.Unmarshal(creds, &credResult) == nil && len(credResult.Credentials) > 0 {
+			sb.WriteString("- Credentials: ")
+			for i, cr := range credResult.Credentials {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(fmt.Sprintf("%s (%s)", cr.Provider, cr.Status))
+			}
+			sb.WriteString("\n")
+		}
+	}
+	sb.WriteString("\n")
 
 	// Company policy.
 	if obs.PolicyDoc != "" {
@@ -684,6 +708,16 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 	case "RecallMemory":
 		query, _ := tc.Input["query"].(string)
 		data, err := c.Rally.SearchMemories(ctx, query)
+		if err != nil {
+			resultContent = fmt.Sprintf("Error: %s", err.Error())
+			isError = true
+		} else {
+			resultContent = string(data)
+		}
+
+	// --- Credentials ---
+	case "ListCredentials":
+		data, err := c.Rally.ListCredentials(ctx)
 		if err != nil {
 			resultContent = fmt.Sprintf("Error: %s", err.Error())
 			isError = true

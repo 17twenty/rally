@@ -160,5 +160,5 @@ func (h *SetupHandler) Create(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	http.Redirect(w, r, "/companies/"+companyID+"?msg=Your+team+is+being+assembled!+Check+Slack+for+introductions.", http.StatusSeeOther)
+	http.Redirect(w, r, "/companies/"+companyID+"/settings?msg=Company+created!+Connect+Slack+to+hire+your+first+AE.", http.StatusSeeOther)
 }

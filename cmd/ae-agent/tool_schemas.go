@@ -306,6 +306,15 @@ func localToolDefs() []ToolDefinition {
 				"required": []string{"query"},
 			},
 		},
+		// --- Credentials ---
+		{
+			Name:        "ListCredentials",
+			Description: "List your available credentials (GitHub, Google, etc). Shows providers and status — no tokens exposed. Use this to check what integrations are configured before trying to use them.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
 		// --- Hiring ---
 		{
 			Name:        "ProposeHire",

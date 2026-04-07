@@ -209,6 +209,7 @@ func main() {
 	mux.Handle("POST /api/ae/memory", aeAuth(aeAPI.StoreMemory))
 	mux.Handle("GET /api/ae/memory/search", aeAuth(aeAPI.SearchMemory))
 	mux.Handle("POST /api/ae/logs", aeAuth(aeAPI.SubmitLog))
+	mux.Handle("GET /api/ae/credentials", aeAuth(aeAPI.ListCredentials))
 	mux.Handle("GET /api/ae/credentials/{provider}", aeAuth(aeAPI.FetchCredential))
 	mux.Handle("POST /api/ae/tools/execute", aeAuth(aeAPI.ExecuteTool))
 	mux.Handle("GET /api/ae/tools/list", aeAuth(aeAPI.ListTools))

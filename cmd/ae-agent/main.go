@@ -90,7 +90,7 @@ func main() {
 		slog.Info("loaded remote tools", "count", len(remoteToolDefs))
 	}
 
-	// Configure credentials if available (git, gh, etc.)
+	// Configure credentials on startup (will also refresh each cycle).
 	setupCredentials(ctx, rally, aeName)
 
 	// Start health server

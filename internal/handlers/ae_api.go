@@ -535,6 +535,41 @@ func (h *AEAPIHandler) SubmitLog(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "logged"})
 }
 
+// ListCredentials handles GET /api/ae/credentials — returns available providers (no tokens).
+func (h *AEAPIHandler) ListCredentials(w http.ResponseWriter, r *http.Request) {
+	employeeID := r.Header.Get("X-AE-Employee-ID")
+
+	if h.Vault == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"credentials": []any{}})
+		return
+	}
+
+	creds, err := h.Vault.List(r.Context(), employeeID)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"credentials": []any{}})
+		return
+	}
+
+	type credInfo struct {
+		Provider   string   `json:"provider"`
+		AccessType string   `json:"access_type"`
+		Scopes     []string `json:"scopes"`
+		Status     string   `json:"status"`
+	}
+	var result []credInfo
+	for _, c := range creds {
+		result = append(result, credInfo{
+			Provider: c.ProviderName, AccessType: c.AccessType,
+			Scopes: c.Scopes, Status: c.Status,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"credentials": result})
+}
+
 // FetchCredential handles GET /api/ae/credentials/{provider} — returns a decrypted credential.
 func (h *AEAPIHandler) FetchCredential(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
