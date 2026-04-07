@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strings"
 
 	"github.com/17twenty/rally/internal/llm"
@@ -17,8 +18,11 @@ func GenerateAEName(ctx context.Context, router *llm.Router, role string, compan
 		usedLower[strings.ToLower(n)] = true
 	}
 
-	// Pick from pool first — deterministic, no LLM needed.
-	for _, name := range namePool {
+	// Pick a random unused name from the pool.
+	shuffled := make([]string, len(namePool))
+	copy(shuffled, namePool)
+	rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+	for _, name := range shuffled {
 		if !usedLower[strings.ToLower(name)] {
 			return name, nil
 		}

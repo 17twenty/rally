@@ -31,5 +31,9 @@ WHERE company_id = $1
 ORDER BY created_at ASC
 LIMIT $3;
 
+-- name: GetSlackEventByID :one
+SELECT id, event_type, channel, user_id, thread_ts, payload
+FROM slack_events WHERE id = $1;
+
 -- name: MarkSlackEventProcessed :exec
 UPDATE slack_events SET processed_at = NOW() WHERE id = $1;

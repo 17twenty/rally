@@ -179,20 +179,28 @@ func (h *Hirer) HireAE(ctx context.Context, companyID string, plan org.PlannedRo
 			slog.Warn("hiring: EnsureDefaultChannels failed", "err", err)
 		}
 
-		// Find the first public channel to announce in.
-		// Prefer #general, fall back to first available channel.
+		// Find the best public channel for announcements.
+		// Priority: #general > channel with most members > first available.
 		announceChannel := "#general"
 		if channels, chErr := h.SlackClient.ListChannels(ctx); chErr == nil {
+			found := false
 			for _, ch := range channels {
 				if ch.Name == "general" {
 					announceChannel = ch.ID
+					found = true
 					break
 				}
 			}
-			// No #general — use the first public channel.
-			if announceChannel == "#general" && len(channels) > 0 {
-				announceChannel = channels[0].ID
-				slog.Info("hiring: no #general channel, using first available", "channel", channels[0].Name)
+			if !found && len(channels) > 0 {
+				// Pick the channel with the most members.
+				best := channels[0]
+				for _, ch := range channels[1:] {
+					if ch.NumMembers > best.NumMembers {
+						best = ch
+					}
+				}
+				announceChannel = best.ID
+				slog.Info("hiring: no #general, using most-populated channel", "channel", best.Name, "members", best.NumMembers)
 			}
 		}
 

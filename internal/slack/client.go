@@ -12,9 +12,10 @@ const slackAPIBase = "https://slack.com/api"
 
 // Channel represents a Slack channel.
 type Channel struct {
-	ID        string
-	Name      string
-	IsPrivate bool
+	ID         string
+	Name       string
+	IsPrivate  bool
+	NumMembers int
 }
 
 // SlackUser represents a Slack workspace user.
@@ -158,9 +159,10 @@ func (c *SlackClient) ListChannels(ctx context.Context) ([]Channel, error) {
 	var result struct {
 		apiResponse
 		Channels []struct {
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			IsPrivate bool   `json:"is_private"`
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			IsPrivate  bool   `json:"is_private"`
+			NumMembers int    `json:"num_members"`
 		} `json:"channels"`
 	}
 	if err := c.getJSON(ctx, "conversations.list", &result); err != nil {
@@ -172,9 +174,10 @@ func (c *SlackClient) ListChannels(ctx context.Context) ([]Channel, error) {
 	channels := make([]Channel, len(result.Channels))
 	for i, ch := range result.Channels {
 		channels[i] = Channel{
-			ID:        ch.ID,
-			Name:      ch.Name,
-			IsPrivate: ch.IsPrivate,
+			ID:         ch.ID,
+			Name:       ch.Name,
+			IsPrivate:  ch.IsPrivate,
+			NumMembers: ch.NumMembers,
 		}
 	}
 	return channels, nil

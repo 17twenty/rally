@@ -120,8 +120,11 @@ func main() {
 	mux.HandleFunc("GET /agents/{id}", ah.Detail)
 	mux.HandleFunc("GET /logs", ah.Logs)
 
+	// AE API handler — shared by AE containers and chat UI.
+	aeAPI := &handlers.AEAPIHandler{DB: database, LLMRouter: llmRouter, Vault: credVault, SlackClient: slackClient, WorkspaceStore: wsStore}
+
 	// Chat routes
-	chh := &handlers.ChatHandler{DB: database, LLMRouter: llmRouter}
+	chh := &handlers.ChatHandler{DB: database, AE: aeAPI}
 	mux.HandleFunc("GET /chat", chh.Show)
 	mux.HandleFunc("POST /chat/message", chh.Message)
 	mux.HandleFunc("GET /chat/history", chh.History)
@@ -192,7 +195,6 @@ func main() {
 	mux.HandleFunc("GET /slack/install", oauthH.Install)
 
 	// AE API routes (used by AE agent containers)
-	aeAPI := &handlers.AEAPIHandler{DB: database, LLMRouter: llmRouter, Vault: credVault, SlackClient: slackClient, WorkspaceStore: wsStore}
 	aeAuth := func(h http.HandlerFunc) http.Handler {
 		return handlers.AEAuthMiddleware(database, http.HandlerFunc(h))
 	}

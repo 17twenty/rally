@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -36,18 +35,15 @@ type HeartbeatWorker struct {
 func (w *HeartbeatWorker) Work(ctx context.Context, job *river.Job[HeartbeatJobArgs]) error {
 	slog.Info("heartbeat_health_check", "employee_id", job.Args.EmployeeID, "company_id", job.Args.CompanyID)
 
-	_, cfg, err := loadEmployee(ctx, w.DB, job.Args.EmployeeID)
+	q := dao.New(w.DB)
+	_, cfg, err := loadEmployee(ctx, q, job.Args.EmployeeID)
 	if err != nil {
 		return fmt.Errorf("load employee %s: %w", job.Args.EmployeeID, err)
 	}
 
 	// Check container health if container manager is available
 	if w.ContainerManager != nil {
-		var containerName string
-		scanErr := w.DB.QueryRow(ctx,
-			`SELECT COALESCE(container_id,'') FROM employees WHERE id = $1`, job.Args.EmployeeID,
-		).Scan(&containerName)
-
+		containerName, scanErr := q.GetEmployeeContainerID(ctx, job.Args.EmployeeID)
 		if scanErr == nil && containerName != "" {
 			info, inspectErr := w.ContainerManager.Inspect(ctx, containerName)
 			if inspectErr != nil || info.State != "running" {
@@ -60,14 +56,14 @@ func (w *HeartbeatWorker) Work(ctx context.Context, job *river.Job[HeartbeatJobA
 						return "unknown"
 					}(),
 				)
+				status := "running"
 				if restartErr := w.ContainerManager.Restart(ctx, containerName); restartErr != nil {
 					slog.Error("heartbeat: restart failed", "employee_id", job.Args.EmployeeID, "err", restartErr)
-					_, _ = w.DB.Exec(ctx,
-						`UPDATE employees SET container_status = 'error' WHERE id = $1`, job.Args.EmployeeID)
-				} else {
-					_, _ = w.DB.Exec(ctx,
-						`UPDATE employees SET container_status = 'running' WHERE id = $1`, job.Args.EmployeeID)
+					status = "error"
 				}
+				_ = q.UpdateEmployeeContainerStatus(ctx, dao.UpdateEmployeeContainerStatusParams{
+					ID: job.Args.EmployeeID, ContainerStatus: &status,
+				})
 			}
 		}
 	}
@@ -89,34 +85,36 @@ func (w *HeartbeatWorker) Work(ctx context.Context, job *river.Job[HeartbeatJobA
 }
 
 // loadEmployee fetches an employee and its config from the database.
-func loadEmployee(ctx context.Context, db *pgxpool.Pool, employeeID string) (domain.Employee, domain.EmployeeConfig, error) {
-	var emp domain.Employee
-	err := db.QueryRow(ctx, `
-		SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''),
-		       type, status, COALESCE(slack_user_id,''), created_at
-		FROM employees WHERE id = $1
-	`, employeeID).Scan(
-		&emp.ID, &emp.CompanyID, &emp.Name, &emp.Role, &emp.Specialties,
-		&emp.Type, &emp.Status, &emp.SlackUserID, &emp.CreatedAt,
-	)
+func loadEmployee(ctx context.Context, q *dao.Queries, employeeID string) (domain.Employee, domain.EmployeeConfig, error) {
+	row, err := q.GetEmployee(ctx, employeeID)
 	if err != nil {
 		return domain.Employee{}, domain.EmployeeConfig{}, fmt.Errorf("query employee: %w", err)
 	}
+	emp := domain.Employee{
+		ID: row.ID, CompanyID: row.CompanyID, Role: row.Role,
+		Type: row.Type, Status: row.Status,
+		Name: deref(row.Name), Specialties: deref(row.Specialties),
+		SlackUserID: deref(row.SlackUserID),
+	}
 
-	var configJSON []byte
-	err = db.QueryRow(ctx, `
-		SELECT config FROM employee_configs WHERE employee_id = $1 LIMIT 1
-	`, employeeID).Scan(&configJSON)
+	cfgRow, err := q.GetEmployeeConfig(ctx, employeeID)
 	if err != nil {
 		return domain.Employee{}, domain.EmployeeConfig{}, fmt.Errorf("query employee_config: %w", err)
 	}
 
 	var cfg domain.EmployeeConfig
-	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+	if err := json.Unmarshal(cfgRow.Config, &cfg); err != nil {
 		return domain.Employee{}, domain.EmployeeConfig{}, fmt.Errorf("unmarshal config: %w", err)
 	}
 
 	return emp, cfg, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // SlackEventWorker processes incoming Slack events.
@@ -137,89 +135,65 @@ func (w *SlackEventWorker) Work(ctx context.Context, job *river.Job[SlackEventJo
 		return fmt.Errorf("no river client available")
 	}
 
-	// 1. Fetch the slack_event row from DB.
-	var (
-		eventType string
-		channel   *string
-		userID    *string
-		threadTS  *string
-		payload   []byte
-	)
-	err := w.DB.QueryRow(ctx, `
-		SELECT event_type, channel, user_id, thread_ts, payload
-		FROM slack_events WHERE id = $1
-	`, job.Args.SlackEventID).Scan(&eventType, &channel, &userID, &threadTS, &payload)
+	q := dao.New(w.DB)
+
+	// 1. Fetch the slack_event row.
+	evt, err := q.GetSlackEventByID(ctx, job.Args.SlackEventID)
 	if err != nil {
 		return fmt.Errorf("fetch slack_event %s: %w", job.Args.SlackEventID, err)
 	}
 
 	// 2. Parse payload to extract text.
 	var payloadMap map[string]any
-	if err := json.Unmarshal(payload, &payloadMap); err != nil {
+	if err := json.Unmarshal(evt.Payload, &payloadMap); err != nil {
 		return fmt.Errorf("unmarshal payload: %w", err)
 	}
 	text, _ := payloadMap["text"].(string)
 
-	// 3. Fetch all AE employees for the company.
-	rows, err := w.DB.Query(ctx, `
-		SELECT id, company_id, COALESCE(name,''), role, COALESCE(specialties,''),
-		       type, status, COALESCE(slack_user_id,''), created_at
-		FROM employees WHERE company_id = $1 AND type = 'ae' AND status = 'active'
-	`, job.Args.CompanyID)
+	// 3. Fetch all active AE employees for the company.
+	aeRows, err := q.ListActiveAEsByCompany(ctx, job.Args.CompanyID)
 	if err != nil {
 		return fmt.Errorf("list employees: %w", err)
 	}
-	defer rows.Close()
 	var employees []domain.Employee
-	for rows.Next() {
-		var emp domain.Employee
-		if err := rows.Scan(&emp.ID, &emp.CompanyID, &emp.Name, &emp.Role,
-			&emp.Specialties, &emp.Type, &emp.Status, &emp.SlackUserID, &emp.CreatedAt); err != nil {
-			return fmt.Errorf("scan employee: %w", err)
-		}
-		employees = append(employees, emp)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("rows error: %w", err)
+	for _, row := range aeRows {
+		employees = append(employees, domain.Employee{
+			ID: row.ID, CompanyID: row.CompanyID, Role: row.Role,
+			Type: row.Type, Status: row.Status,
+			Name: deref(row.Name), Specialties: deref(row.Specialties),
+			SlackUserID: deref(row.SlackUserID),
+		})
 	}
 
 	// 4. Determine target AEs using routing logic.
 	var targets []domain.Employee
 
-	if eventType == "app_mention" {
-		// Always wake up all active AEs for app_mention events.
+	if evt.EventType == "app_mention" {
 		targets = employees
 	} else {
-		// Try @mention routing first.
 		mentions := slack.ParseMentions(text)
 		if len(mentions) > 0 {
 			targets = slack.MatchAEsByRole(employees, mentions)
 		}
 
-		// Try name-based routing — "Hey Drew" matches Drew.
 		if len(targets) == 0 {
 			targets = slack.MatchAEsByName(employees, text)
 		}
 
-		// Channel-based routing if no name or mention matches.
-		if len(targets) == 0 && channel != nil {
-			channelName := strings.TrimPrefix(*channel, "#")
+		if len(targets) == 0 && evt.Channel != nil {
+			channelName := strings.TrimPrefix(*evt.Channel, "#")
 			roles := slack.ChannelToRoles(channelName)
 			targets = slack.MatchAEsByRole(employees, roles)
 		}
 
-		// Fallback: wake up CEO-AE.
 		if len(targets) == 0 {
 			targets = slack.MatchAEsByRole(employees, []string{"CEO"})
 		}
 	}
 
-	// 5. Enqueue HeartbeatJobArgs for each target AE.
+	// 5. Enqueue immediate heartbeat for each target AE.
 	targetIDs := make([]string, 0, len(targets))
 	for _, emp := range targets {
-		// Insert immediate heartbeat with NO unique constraint.
-		// The regular heartbeat scheduler uses dedup, but Slack-triggered
-		// wakes must bypass it to ensure fast response times.
 		_, err := rc.Insert(ctx, HeartbeatJobArgs{
 			EmployeeID: emp.ID,
 			CompanyID:  job.Args.CompanyID,
@@ -233,14 +207,11 @@ func (w *SlackEventWorker) Work(ctx context.Context, job *river.Job[SlackEventJo
 	}
 
 	// 6. Mark slack_event as processed.
-	if _, err := w.DB.Exec(ctx, `UPDATE slack_events SET processed_at = NOW() WHERE id = $1`, job.Args.SlackEventID); err != nil {
-		return fmt.Errorf("mark processed: %w", err)
-	}
+	_ = q.MarkSlackEventProcessed(ctx, job.Args.SlackEventID)
 
-	// 7. Log routing decision.
 	slog.Info("slack_event_routed",
 		"event_id", job.Args.SlackEventID,
-		"event_type", eventType,
+		"event_type", evt.EventType,
 		"target_aes", targetIDs,
 	)
 
@@ -268,19 +239,20 @@ type HiringWorker struct {
 func (w *HiringWorker) Work(ctx context.Context, job *river.Job[HiringJobArgs]) error {
 	slog.Info("hiring", "role", job.Args.Role, "company_id", job.Args.CompanyID, "reports_to", job.Args.ReportsTo)
 
-	// Load company from DB
-	var company domain.Company
-	err := w.DB.QueryRow(ctx,
-		`SELECT id, name, COALESCE(mission,''), status, created_at FROM companies WHERE id = $1`,
-		job.Args.CompanyID,
-	).Scan(&company.ID, &company.Name, &company.Mission, &company.Status, &company.CreatedAt)
+	q := dao.New(w.DB)
+
+	// Load company.
+	co, err := q.GetCompany(ctx, job.Args.CompanyID)
 	if err != nil {
 		return fmt.Errorf("load company %s: %w", job.Args.CompanyID, err)
 	}
+	company := domain.Company{
+		ID: co.ID, Name: co.Name, Mission: deref(co.Mission),
+		Status: co.Status,
+	}
 
-	// Load Slack token from vault via sqlc.
+	// Load Slack token from vault.
 	var slackClient *slack.SlackClient
-	q := dao.New(w.DB)
 	companyIDRef := job.Args.CompanyID
 	if tokenPtr, tokenErr := q.GetActiveProviderToken(ctx, dao.GetActiveProviderTokenParams{
 		CompanyID: &companyIDRef, ProviderName: "slack",
@@ -441,60 +413,41 @@ type MemberJoinWorker struct {
 func (w *MemberJoinWorker) Work(ctx context.Context, job *river.Job[MemberJoinJobArgs]) error {
 	slog.Info("member_join", "slack_user_id", job.Args.SlackUserID, "name", job.Args.RealName)
 
+	q := dao.New(w.DB)
+
 	// 1. Resolve company ID — single-tenant fallback if empty.
 	companyID := job.Args.CompanyID
 	if companyID == "" {
-		if err := w.DB.QueryRow(ctx,
-			`SELECT id FROM companies WHERE status = 'active' ORDER BY created_at LIMIT 1`,
-		).Scan(&companyID); err != nil {
+		co, err := q.GetFirstActiveCompany(ctx)
+		if err != nil {
 			return fmt.Errorf("resolve company: %w", err)
 		}
+		companyID = co.ID
 	}
 
-	// 2. Upsert the human employee using a deterministic ID derived from their Slack user ID.
+	// 2. Upsert the human employee.
 	name := job.Args.RealName
 	if name == "" {
 		name = job.Args.SlackUserID
 	}
 	humanID := "human-" + job.Args.SlackUserID
-	if _, err := w.DB.Exec(ctx, `
-		INSERT INTO employees (id, company_id, name, role, type, status, slack_user_id)
-		VALUES ($1, $2, $3, 'Human', 'human', 'active', $4)
-		ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
-	`, humanID, companyID, name, job.Args.SlackUserID); err != nil {
+	if err := q.UpsertHumanEmployee(ctx, dao.UpsertHumanEmployeeParams{
+		ID: humanID, CompanyID: companyID, Name: &name, SlackUserID: &job.Args.SlackUserID,
+	}); err != nil {
 		slog.Warn("member_join: upsert human employee failed", "err", err)
-		// Non-fatal — still attempt the greeting.
 	}
 
-	// 3. Find the CEO-AE first; fall back to any active AE.
-	var aeID, aeName string
-	var configJSON []byte
-	err := w.DB.QueryRow(ctx, `
-		SELECT e.id, COALESCE(e.name, e.role, 'AE'), ec.config
-		FROM employees e
-		JOIN employee_configs ec ON ec.employee_id = e.id
-		WHERE e.company_id = $1 AND e.type = 'ae' AND e.status = 'active'
-		  AND LOWER(e.role) LIKE '%ceo%'
-		ORDER BY e.created_at LIMIT 1
-	`, companyID).Scan(&aeID, &aeName, &configJSON)
+	// 3. Find the best AE to send the greeting (prefers CEO).
+	aeRow, err := q.GetAEWithConfig(ctx, companyID)
 	if err != nil {
-		err = w.DB.QueryRow(ctx, `
-			SELECT e.id, COALESCE(e.name, e.role, 'AE'), ec.config
-			FROM employees e
-			JOIN employee_configs ec ON ec.employee_id = e.id
-			WHERE e.company_id = $1 AND e.type = 'ae' AND e.status = 'active'
-			ORDER BY e.created_at LIMIT 1
-		`, companyID).Scan(&aeID, &aeName, &configJSON)
-		if err != nil {
-			slog.Warn("member_join: no active AE found, skipping greeting", "company_id", companyID)
-			return nil
-		}
+		slog.Warn("member_join: no active AE found, skipping greeting", "company_id", companyID)
+		return nil
 	}
 
 	// 4. Load the AE's soul/personality from their config.
 	var cfg domain.EmployeeConfig
 	soulContent := ""
-	if unmarshalErr := json.Unmarshal(configJSON, &cfg); unmarshalErr == nil {
+	if unmarshalErr := json.Unmarshal(aeRow.Config, &cfg); unmarshalErr == nil {
 		soulContent = cfg.Identity.SoulFile
 	}
 
@@ -522,14 +475,17 @@ func (w *MemberJoinWorker) Work(ctx context.Context, job *river.Job[MemberJoinJo
 		greeting = fmt.Sprintf("Welcome to the team, %s! Really glad to have you with us.", name)
 	}
 
-	// 6. Post the greeting to #general as the AE persona.
-	slackToken := os.Getenv("SLACK_BOT_TOKEN")
-	if slackToken == "" {
-		slog.Warn("member_join: SLACK_BOT_TOKEN not set, skipping greeting")
+	// 6. Post the greeting via Slack token from vault.
+	companyIDRef := companyID
+	tokenPtr, tokenErr := q.GetActiveProviderToken(ctx, dao.GetActiveProviderTokenParams{
+		CompanyID: &companyIDRef, ProviderName: "slack",
+	})
+	if tokenErr != nil || tokenPtr == nil || *tokenPtr == "" {
+		slog.Warn("member_join: no slack token in vault, skipping greeting")
 		return nil
 	}
-	slackClient := slack.NewClient(slackToken)
-	msg := fmt.Sprintf("[%s] %s", aeName, greeting)
+	slackClient := slack.NewClient(*tokenPtr)
+	msg := fmt.Sprintf("*%s:* %s", aeRow.Name, greeting)
 	if _, postErr := slackClient.PostMessage(ctx, "#general", msg); postErr != nil {
 		slog.Warn("member_join: post greeting failed", "err", postErr)
 	}

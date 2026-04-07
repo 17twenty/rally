@@ -26,3 +26,6 @@ UPDATE companies SET slack_team_id = $2, slack_team_name = $3, slack_bot_user_id
 
 -- name: ListCompaniesByName :many
 SELECT * FROM companies ORDER BY name;
+
+-- name: GetFirstActiveCompany :one
+SELECT * FROM companies WHERE status = 'active' ORDER BY created_at LIMIT 1;

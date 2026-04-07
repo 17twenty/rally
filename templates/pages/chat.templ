@@ -43,6 +43,8 @@ func chatEmployeesJSON(employees []domain.Employee) string {
 
 templ Chat(data ChatData) {
 	@layout.Page("Chat") {
+		<!-- Markdown renderer for chat messages -->
+		<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 		<!-- Static JavaScript (no Go expressions inside script tags) -->
 		<script>
 		function chatPage() {
@@ -183,7 +185,12 @@ templ Chat(data ChatData) {
 									<template x-if="msg.sender !== 'user'">
 										<p class="text-xs font-semibold text-muted-foreground mb-1" x-text="msg.senderName"></p>
 									</template>
-									<p class="whitespace-pre-wrap break-words" x-text="msg.text"></p>
+									<template x-if="msg.sender === 'user'">
+										<p class="whitespace-pre-wrap break-words" x-text="msg.text"></p>
+									</template>
+									<template x-if="msg.sender !== 'user'">
+										<div class="prose prose-sm dark:prose-invert max-w-none break-words [&>p]:my-1 [&>ul]:my-1 [&>ol]:my-1 [&>h1]:text-base [&>h2]:text-sm [&>h3]:text-sm" x-html="typeof marked !== 'undefined' ? marked.parse(msg.text || '') : msg.text"></div>
+									</template>
 									<p class="text-xs text-muted-foreground mt-1 text-right" x-text="msg.ts"></p>
 								</div>
 							</div>

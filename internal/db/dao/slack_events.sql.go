@@ -107,6 +107,34 @@ func (q *Queries) GetRecentSlackMessagesExcludingBot(ctx context.Context, arg Ge
 	return items, nil
 }
 
+const getSlackEventByID = `-- name: GetSlackEventByID :one
+SELECT id, event_type, channel, user_id, thread_ts, payload
+FROM slack_events WHERE id = $1
+`
+
+type GetSlackEventByIDRow struct {
+	ID        string          `json:"id"`
+	EventType string          `json:"event_type"`
+	Channel   *string         `json:"channel"`
+	UserID    *string         `json:"user_id"`
+	ThreadTs  *string         `json:"thread_ts"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+func (q *Queries) GetSlackEventByID(ctx context.Context, id string) (GetSlackEventByIDRow, error) {
+	row := q.db.QueryRow(ctx, getSlackEventByID, id)
+	var i GetSlackEventByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.EventType,
+		&i.Channel,
+		&i.UserID,
+		&i.ThreadTs,
+		&i.Payload,
+	)
+	return i, err
+}
+
 const getUnprocessedSlackEvents = `-- name: GetUnprocessedSlackEvents :many
 SELECT id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, processed_at, created_at, text FROM slack_events WHERE processed_at IS NULL AND company_id = $1 ORDER BY created_at LIMIT $2
 `

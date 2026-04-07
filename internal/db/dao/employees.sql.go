@@ -7,6 +7,7 @@ package dao
 
 import (
 	"context"
+	"encoding/json"
 )
 
 const countAEs = `-- name: CountAEs :one
@@ -18,6 +19,34 @@ func (q *Queries) CountAEs(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const getAEWithConfig = `-- name: GetAEWithConfig :one
+SELECT e.id, COALESCE(e.name, e.role) as name, e.role, ec.config
+FROM employees e
+JOIN employee_configs ec ON ec.employee_id = e.id
+WHERE e.company_id = $1 AND e.type = 'ae' AND e.status = 'active'
+ORDER BY CASE WHEN LOWER(e.role) LIKE '%ceo%' THEN 0 ELSE 1 END, e.created_at
+LIMIT 1
+`
+
+type GetAEWithConfigRow struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Role   string          `json:"role"`
+	Config json.RawMessage `json:"config"`
+}
+
+func (q *Queries) GetAEWithConfig(ctx context.Context, companyID string) (GetAEWithConfigRow, error) {
+	row := q.db.QueryRow(ctx, getAEWithConfig, companyID)
+	var i GetAEWithConfigRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Role,
+		&i.Config,
+	)
+	return i, err
 }
 
 const getEmployee = `-- name: GetEmployee :one
@@ -71,6 +100,17 @@ func (q *Queries) GetEmployeeByRole(ctx context.Context, arg GetEmployeeByRolePa
 	return i, err
 }
 
+const getEmployeeContainerID = `-- name: GetEmployeeContainerID :one
+SELECT COALESCE(container_id,'') as container_id FROM employees WHERE id = $1
+`
+
+func (q *Queries) GetEmployeeContainerID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getEmployeeContainerID, id)
+	var container_id string
+	err := row.Scan(&container_id)
+	return container_id, err
+}
+
 const insertEmployee = `-- name: InsertEmployee :one
 INSERT INTO employees (id, company_id, role, type, status, slack_user_id, name, specialties)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -122,6 +162,42 @@ SELECT id, company_id, role, type, status, slack_user_id, created_at, name, spec
 
 func (q *Queries) ListAEsByCompany(ctx context.Context, companyID string) ([]Employee, error) {
 	rows, err := q.db.Query(ctx, listAEsByCompany, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Employee{}
+	for rows.Next() {
+		var i Employee
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyID,
+			&i.Role,
+			&i.Type,
+			&i.Status,
+			&i.SlackUserID,
+			&i.CreatedAt,
+			&i.Name,
+			&i.Specialties,
+			&i.ContainerID,
+			&i.ContainerStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listActiveAEsByCompany = `-- name: ListActiveAEsByCompany :many
+SELECT id, company_id, role, type, status, slack_user_id, created_at, name, specialties, container_id, container_status FROM employees WHERE company_id = $1 AND type = 'ae' AND status = 'active' ORDER BY created_at
+`
+
+func (q *Queries) ListActiveAEsByCompany(ctx context.Context, companyID string) ([]Employee, error) {
+	rows, err := q.db.Query(ctx, listActiveAEsByCompany, companyID)
 	if err != nil {
 		return nil, err
 	}
@@ -321,5 +397,28 @@ type UpdateEmployeeStatusParams struct {
 
 func (q *Queries) UpdateEmployeeStatus(ctx context.Context, arg UpdateEmployeeStatusParams) error {
 	_, err := q.db.Exec(ctx, updateEmployeeStatus, arg.ID, arg.Status)
+	return err
+}
+
+const upsertHumanEmployee = `-- name: UpsertHumanEmployee :exec
+INSERT INTO employees (id, company_id, name, role, type, status, slack_user_id)
+VALUES ($1, $2, $3, 'Human', 'human', 'active', $4)
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
+`
+
+type UpsertHumanEmployeeParams struct {
+	ID          string  `json:"id"`
+	CompanyID   string  `json:"company_id"`
+	Name        *string `json:"name"`
+	SlackUserID *string `json:"slack_user_id"`
+}
+
+func (q *Queries) UpsertHumanEmployee(ctx context.Context, arg UpsertHumanEmployeeParams) error {
+	_, err := q.db.Exec(ctx, upsertHumanEmployee,
+		arg.ID,
+		arg.CompanyID,
+		arg.Name,
+		arg.SlackUserID,
+	)
 	return err
 }

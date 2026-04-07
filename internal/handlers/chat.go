@@ -19,14 +19,20 @@ import (
 )
 
 // ChatHandler handles chat UI and API routes.
+// It delegates tool execution to AEAPIHandler — same code path as container AEs.
 type ChatHandler struct {
-	DB        *db.DB
-	LLMRouter *llm.Router
+	DB *db.DB
+	AE *AEAPIHandler // shared service methods for tool execution + LLM
 }
 
 func (h *ChatHandler) q() *dao.Queries { return dao.New(h.DB.Pool) }
 
-const rallySystemPrompt = "You are Rally, an intelligent operating system for organizations. You help users understand their organization, monitor AE agents, review logs, and coordinate work. Be concise and helpful."
+const rallySystemPrompt = `You are Rally, the operating system for AI-powered organizations.
+You have tools to take action — use them. Don't suggest things the user should do manually; do it yourself.
+
+When the user asks you to create a task, add a backlog item, delegate work, or send a message — use the appropriate tool and confirm it's done.
+
+Be concise and action-oriented. Check real data before answering questions about the team or work.`
 
 // Show handles GET /chat.
 func (h *ChatHandler) Show(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +41,6 @@ func (h *ChatHandler) Show(w http.ResponseWriter, r *http.Request) {
 	if h.DB != nil {
 		ctx := r.Context()
 
-		// Load all companies
 		if companies, err := h.q().ListCompanies(ctx); err == nil {
 			for _, c := range companies {
 				data.Companies = append(data.Companies, domain.Company{
@@ -48,7 +53,6 @@ func (h *ChatHandler) Show(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Load all employees
 		if employees, err := h.q().ListAllEmployeesByCreatedAt(ctx); err == nil {
 			for _, e := range employees {
 				data.Employees = append(data.Employees, domain.Employee{
@@ -73,14 +77,12 @@ func (h *ChatHandler) Show(w http.ResponseWriter, r *http.Request) {
 	templ.Handler(pages.Chat(data)).ServeHTTP(w, r)
 }
 
-// chatMessageRequest is the JSON body for POST /chat/message.
 type chatMessageRequest struct {
 	CompanyID string `json:"company_id"`
 	AEID      string `json:"ae_id"`
 	Message   string `json:"message"`
 }
 
-// chatMessageResponse is the JSON response for POST /chat/message.
 type chatMessageResponse struct {
 	Response string `json:"response"`
 	Sender   string `json:"sender"`
@@ -103,41 +105,26 @@ func (h *ChatHandler) Message(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	senderName := "Rally"
 	systemPrompt := rallySystemPrompt
-	modelRef := h.LLMRouter.DefaultModel()
+	modelRef := h.AE.LLMRouter.DefaultModel()
 
-	// Ground the orchestrator prompt with real DB state.
+	// Ground the orchestrator prompt with real org state via service methods.
 	if req.AEID == "" && h.DB != nil {
 		var sb strings.Builder
 		sb.WriteString(rallySystemPrompt)
 		sb.WriteString("\n\n## Current organization state\n")
 
-		companies, err := h.q().ListCompanies(ctx)
-		if err == nil {
-			hasCompanies := len(companies) > 0
-			for _, c := range companies {
-				sb.WriteString(fmt.Sprintf("- %s (status: %s)", c.Name, c.Status))
-				if c.Mission != nil && *c.Mission != "" {
-					sb.WriteString(fmt.Sprintf(" — %s", *c.Mission))
+		companyID := req.CompanyID
+		if companyID != "" {
+			if team, err := h.AE.GetTeamMembers(ctx, companyID); err == nil {
+				for _, m := range team {
+					sb.WriteString(fmt.Sprintf("- %s (role: %s, type: %s, status: %s)\n", m.Name, m.Role, m.Type, m.Status))
 				}
-				sb.WriteString("\n")
-
-				// Employees for this company
-				if emps, empErr := h.q().ListEmployeesByCompany(ctx, c.ID); empErr == nil {
-					for _, e := range emps {
-						label := db.Deref(e.Name)
-						if label == "" {
-							label = e.Role
-						}
-						sb.WriteString(fmt.Sprintf("  - %s (role: %s, type: %s, status: %s)\n", label, e.Role, e.Type, e.Status))
-					}
-				}
-			}
-			if !hasCompanies {
-				sb.WriteString("\nNo companies have been created yet. The database is empty.\n")
+			} else {
+				sb.WriteString("(no team data available)\n")
 			}
 		}
 
-		sb.WriteString("\nIMPORTANT: Only reference data listed above. If no companies or agents exist, say so honestly. Never invent or hallucinate data.\n")
+		sb.WriteString("\nIMPORTANT: Only reference data from your tools. Never invent or hallucinate data.\n")
 		systemPrompt = sb.String()
 	}
 
@@ -146,15 +133,9 @@ func (h *ChatHandler) Message(w http.ResponseWriter, r *http.Request) {
 		daoEmp, err := h.q().GetEmployee(ctx, req.AEID)
 		if err == nil {
 			emp := domain.Employee{
-				ID:          daoEmp.ID,
-				CompanyID:   daoEmp.CompanyID,
-				Name:        db.Deref(daoEmp.Name),
-				Role:        daoEmp.Role,
-				Specialties: db.Deref(daoEmp.Specialties),
-				Type:        daoEmp.Type,
-				Status:      daoEmp.Status,
-				SlackUserID: db.Deref(daoEmp.SlackUserID),
-				CreatedAt:   db.PgTime(daoEmp.CreatedAt),
+				ID: daoEmp.ID, CompanyID: daoEmp.CompanyID,
+				Name: db.Deref(daoEmp.Name), Role: daoEmp.Role,
+				Type: daoEmp.Type, Status: daoEmp.Status,
 			}
 
 			senderName = emp.Name
@@ -162,9 +143,7 @@ func (h *ChatHandler) Message(w http.ResponseWriter, r *http.Request) {
 				senderName = emp.Role
 			}
 
-			// Load employee config for soul content
 			ecRow, cfgErr := h.q().GetEmployeeConfig(ctx, emp.ID)
-
 			var cfg domain.EmployeeConfig
 			if cfgErr == nil && len(ecRow.Config) > 0 {
 				_ = json.Unmarshal(ecRow.Config, &cfg)
@@ -175,12 +154,11 @@ func (h *ChatHandler) Message(w http.ResponseWriter, r *http.Request) {
 			}
 
 			policyDoc, _ := h.q().GetCompanyPolicy(ctx, emp.CompanyID)
-
 			systemPrompt = agent.BuildSystemPrompt(emp, cfg, cfg.Identity.SoulFile, policyDoc)
 		}
 	}
 
-	// Build context from last 10 chat memory events for this entity.
+	// Build context from recent chat history.
 	employeeID := req.AEID
 	if employeeID == "" {
 		employeeID = fmt.Sprintf("rally-%s", req.CompanyID)
@@ -192,91 +170,82 @@ func (h *ChatHandler) Message(w http.ResponseWriter, r *http.Request) {
 		recent, err := store.GetByType(ctx, employeeID, "episodic", 10)
 		if err == nil {
 			for i := len(recent) - 1; i >= 0; i-- {
-				m := recent[i]
-				if strings.HasPrefix(m.Content, "[CHAT]") {
-					contextLines = append(contextLines, m.Content)
+				if strings.HasPrefix(recent[i].Content, "[CHAT]") {
+					contextLines = append(contextLines, recent[i].Content)
 				}
 			}
 		}
 	}
 
-	// Build user prompt with optional context.
 	userPrompt := req.Message
 	if len(contextLines) > 0 {
 		userPrompt = "## Recent conversation context\n" + strings.Join(contextLines, "\n") + "\n\n## New message\n" + req.Message
 	}
 
-	// Call LLM router with tool-use support.
-	// The chat handler runs a mini agentic loop (max 5 turns) so the AE
-	// can check its real backlog, work items, etc. instead of hallucinating.
+	// Agentic loop — same pattern as AE cycle, using service methods for tools.
 	var response string
-	if h.LLMRouter != nil {
-		tools := chatToolDefs()
-		messages := []llm.ConversationMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
+	tools := chatToolDefs()
+	messages := []llm.ConversationMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+
+	companyID := h.AE.ResolveCompanyID(ctx, employeeID)
+	if companyID == "" {
+		companyID = req.CompanyID
+	}
+
+	for turn := 0; turn < 10; turn++ {
+		result, llmErr := h.AE.LLMRouter.CompleteWithTools(ctx, modelRef, messages, tools, 2000)
+		if llmErr != nil {
+			response = fmt.Sprintf("(LLM unavailable: %v)", llmErr)
+			break
 		}
 
-		for turn := 0; turn < 5; turn++ {
-			result, llmErr := h.LLMRouter.CompleteWithTools(ctx, modelRef, messages, tools, 1500)
-			if llmErr != nil {
-				response = fmt.Sprintf("(LLM unavailable: %v)", llmErr)
-				break
-			}
+		messages = append(messages, result.Message)
 
-			messages = append(messages, result.Message)
-
-			if result.StopReason == llm.StopReasonEndTurn || result.StopReason == llm.StopReasonMaxTokens {
-				response = result.Message.Content
-				break
-			}
-
-			if result.StopReason == llm.StopReasonToolUse && len(result.Message.ToolCalls) > 0 {
-				var toolResults []llm.ToolResult
-				for _, tc := range result.Message.ToolCalls {
-					tr := h.executeChatTool(ctx, tc, employeeID)
-					toolResults = append(toolResults, tr)
-				}
-				messages = append(messages, llm.ConversationMessage{
-					Role:        "user",
-					ToolResults: toolResults,
-				})
-				continue
-			}
-
+		if result.StopReason == llm.StopReasonEndTurn || result.StopReason == llm.StopReasonMaxTokens {
 			response = result.Message.Content
 			break
 		}
 
-		if response == "" {
-			response = "(no response generated)"
+		if result.StopReason == llm.StopReasonToolUse && len(result.Message.ToolCalls) > 0 {
+			var toolResults []llm.ToolResult
+			for _, tc := range result.Message.ToolCalls {
+				tr := h.executeTool(ctx, tc, employeeID, companyID)
+				toolResults = append(toolResults, tr)
+			}
+			messages = append(messages, llm.ConversationMessage{
+				Role: "user", ToolResults: toolResults,
+			})
+			continue
 		}
-	} else {
-		response = "(LLM router not configured)"
+
+		response = result.Message.Content
+		break
 	}
 
-	// Save exchange to memory_events.
+	if response == "" {
+		response = "(no response generated)"
+	}
+
+	// Save exchange to memory.
 	if h.DB != nil {
 		store := memory.NewMemoryStore(h.DB.Pool)
 		content := fmt.Sprintf("[CHAT] Human: %s\n%s: %s", req.Message, senderName, response)
-		metadata := map[string]any{
-			"source":     "chat",
-			"ae_id":      req.AEID,
-			"company_id": req.CompanyID,
-		}
-		_ = store.SaveEpisodic(ctx, employeeID, content, metadata)
+		_ = store.SaveEpisodic(ctx, employeeID, content, map[string]any{
+			"source": "chat", "ae_id": req.AEID, "company_id": req.CompanyID,
+		})
 	}
 
-	ts := time.Now().Format("15:04:05")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(chatMessageResponse{
 		Response: response,
 		Sender:   senderName,
-		TS:       ts,
+		TS:       time.Now().Format("15:04:05"),
 	})
 }
 
-// chatHistoryMessage is a single message returned by the history endpoint.
 type chatHistoryMessage struct {
 	Sender     string `json:"sender"`
 	SenderName string `json:"senderName"`
@@ -296,9 +265,6 @@ func (h *ChatHandler) History(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Fetch last 20 episodic memory events that start with [CHAT], for any
-	// employee in this company (or the rally virtual employee for this company).
-	// Dynamic query with subquery — stays as raw SQL.
 	rows, err := h.DB.Pool.Query(ctx, `
 		SELECT me.employee_id, me.content, me.created_at
 		FROM memory_events me
@@ -324,43 +290,32 @@ func (h *ChatHandler) History(w http.ResponseWriter, r *http.Request) {
 	var rawRows []rawRow
 	for rows.Next() {
 		var rr rawRow
-		if scanErr := rows.Scan(&rr.EmployeeID, &rr.Content, &rr.CreatedAt); scanErr == nil {
+		if rows.Scan(&rr.EmployeeID, &rr.Content, &rr.CreatedAt) == nil {
 			rawRows = append(rawRows, rr)
 		}
 	}
 
-	// Reverse to chronological order.
 	msgs := make([]chatHistoryMessage, 0, len(rawRows)*2)
 	for i := len(rawRows) - 1; i >= 0; i-- {
 		rr := rawRows[i]
 		ts := rr.CreatedAt.Format("15:04:05")
-		// Content format: "[CHAT] Human: {msg}\n{sender}: {response}"
 		content := strings.TrimPrefix(rr.Content, "[CHAT] ")
 		parts := strings.SplitN(content, "\n", 2)
 		if len(parts) >= 1 {
-			humanPart := strings.TrimPrefix(parts[0], "Human: ")
 			msgs = append(msgs, chatHistoryMessage{
-				Sender:     "user",
-				SenderName: "You",
-				Text:       humanPart,
-				TS:         ts,
+				Sender: "user", SenderName: "You",
+				Text: strings.TrimPrefix(parts[0], "Human: "), TS: ts,
 			})
 		}
 		if len(parts) >= 2 {
-			// "SenderName: response text"
 			aePart := parts[1]
 			colonIdx := strings.Index(aePart, ": ")
-			senderName := "Rally"
-			text := aePart
+			name, text := "Rally", aePart
 			if colonIdx >= 0 {
-				senderName = aePart[:colonIdx]
-				text = aePart[colonIdx+2:]
+				name, text = aePart[:colonIdx], aePart[colonIdx+2:]
 			}
 			msgs = append(msgs, chatHistoryMessage{
-				Sender:     "ae",
-				SenderName: senderName,
-				Text:       text,
-				TS:         ts,
+				Sender: "ae", SenderName: name, Text: text, TS: ts,
 			})
 		}
 	}
@@ -368,13 +323,18 @@ func (h *ChatHandler) History(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(msgs)
 }
 
-// chatToolDefs returns tool definitions available in the /chat web UI.
-// These let AEs check their real work state instead of hallucinating.
+// chatToolDefs returns tool definitions for the /chat UI.
+// These mirror the AE remote tools — same capabilities, no local tools.
 func chatToolDefs() []llm.ToolDefinition {
 	return []llm.ToolDefinition{
 		{
+			Name:        "ListTeam",
+			Description: "List all team members with their roles, types, and status.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+		{
 			Name:        "BacklogList",
-			Description: "List your current work items. Returns real data from the database.",
+			Description: "List work items for an AE. Optionally filter by status.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -382,57 +342,145 @@ func chatToolDefs() []llm.ToolDefinition {
 				},
 			},
 		},
+		{
+			Name:        "ListTasks",
+			Description: "List all active tasks with assignees.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+		{
+			Name:        "ListProposedHires",
+			Description: "List all proposed hires and their status.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+		{
+			Name:        "CreateTask",
+			Description: "Create a task and assign it to an AE by role. The AE will see it in their next cycle.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title":         map[string]any{"type": "string", "description": "Task title"},
+					"description":   map[string]any{"type": "string", "description": "What needs to be done"},
+					"assignee_role": map[string]any{"type": "string", "description": "Role to assign to (e.g. CEO, Go Developer)"},
+				},
+				"required": []string{"title", "assignee_role"},
+			},
+		},
+		{
+			Name:        "BacklogAdd",
+			Description: "Add a work item to an AE's backlog.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title":       map[string]any{"type": "string", "description": "Work item title"},
+					"description": map[string]any{"type": "string", "description": "Details"},
+					"priority":    map[string]any{"type": "string", "description": "critical, high, medium, low"},
+				},
+				"required": []string{"title"},
+			},
+		},
+		{
+			Name:        "SendMessageToAE",
+			Description: "Send a direct message to an AE. They'll see it in their next cycle.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target_role": map[string]any{"type": "string", "description": "Role of the AE (e.g. CEO, Go Developer)"},
+					"message":     map[string]any{"type": "string", "description": "The message"},
+				},
+				"required": []string{"target_role", "message"},
+			},
+		},
+		{
+			Name:        "SearchMemories",
+			Description: "Search an AE's stored memories by keyword.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string", "description": "Keyword to search for"},
+				},
+				"required": []string{"query"},
+			},
+		},
 	}
 }
 
-// executeChatTool runs a tool call within the /chat handler (server-side, no container).
-func (h *ChatHandler) executeChatTool(ctx context.Context, tc llm.ToolCall, employeeID string) llm.ToolResult {
+// executeTool dispatches a chat tool call to the shared AEAPIHandler service methods.
+// Same code path as container AEs — no duplication.
+func (h *ChatHandler) executeTool(ctx context.Context, tc llm.ToolCall, employeeID, companyID string) llm.ToolResult {
+	result := func(data any) llm.ToolResult {
+		b, _ := json.Marshal(data)
+		return llm.ToolResult{ToolUseID: tc.ID, Content: string(b)}
+	}
+	errResult := func(err error) llm.ToolResult {
+		return llm.ToolResult{ToolUseID: tc.ID, Content: fmt.Sprintf("Error: %s", err), IsError: true}
+	}
+
 	switch tc.Name {
-	case "BacklogList":
-		if h.DB == nil {
-			return llm.ToolResult{ToolUseID: tc.ID, Content: "Database not available", IsError: true}
-		}
-		// Dynamic WHERE clause — stays as raw SQL.
-		status, _ := tc.Input["status"].(string)
-		query := `SELECT id, title, status, priority, updated_at FROM work_items WHERE owner_id = $1`
-		args := []any{employeeID}
-		if status != "" && status != "all" {
-			query += ` AND status = $2`
-			args = append(args, status)
-		} else {
-			query += ` AND status NOT IN ('done','cancelled')`
-		}
-		query += ` ORDER BY updated_at DESC LIMIT 20`
-
-		rows, err := h.DB.Pool.Query(ctx, query, args...)
+	case "ListTeam":
+		team, err := h.AE.GetTeamMembers(ctx, companyID)
 		if err != nil {
-			return llm.ToolResult{ToolUseID: tc.ID, Content: fmt.Sprintf("Error: %s", err), IsError: true}
+			return errResult(err)
 		}
-		defer rows.Close()
+		return result(map[string]any{"team": team, "count": len(team)})
 
-		type item struct {
-			ID        string `json:"id"`
-			Title     string `json:"title"`
-			Status    string `json:"status"`
-			Priority  string `json:"priority"`
-			UpdatedAt string `json:"updated_at"`
+	case "BacklogList":
+		status, _ := tc.Input["status"].(string)
+		items, err := h.AE.ListBacklog(ctx, employeeID, status)
+		if err != nil {
+			return errResult(err)
 		}
-		var items []item
-		for rows.Next() {
-			var it item
-			var updatedAt time.Time
-			if rows.Scan(&it.ID, &it.Title, &it.Status, &it.Priority, &updatedAt) == nil {
-				it.UpdatedAt = updatedAt.Format(time.RFC3339)
-				items = append(items, it)
-			}
-		}
+		return result(map[string]any{"items": items, "count": len(items)})
 
-		if len(items) == 0 {
-			return llm.ToolResult{ToolUseID: tc.ID, Content: `{"items":[],"count":0,"note":"No work items found. You have no active backlog."}`}
+	case "ListTasks":
+		tasks, err := h.AE.ListAllActiveTasks(ctx)
+		if err != nil {
+			return errResult(err)
 		}
+		return result(map[string]any{"tasks": tasks, "count": len(tasks)})
 
-		data, _ := json.Marshal(map[string]any{"items": items, "count": len(items)})
-		return llm.ToolResult{ToolUseID: tc.ID, Content: string(data)}
+	case "ListProposedHires":
+		hires, err := h.AE.ListProposedHiresForCompany(ctx, companyID)
+		if err != nil {
+			return errResult(err)
+		}
+		return result(map[string]any{"hires": hires, "count": len(hires)})
+
+	case "CreateTask":
+		title, _ := tc.Input["title"].(string)
+		desc, _ := tc.Input["description"].(string)
+		role, _ := tc.Input["assignee_role"].(string)
+		res, err := h.AE.CreateTaskForRole(ctx, companyID, title, desc, role)
+		if err != nil {
+			return errResult(err)
+		}
+		return result(res)
+
+	case "BacklogAdd":
+		title, _ := tc.Input["title"].(string)
+		desc, _ := tc.Input["description"].(string)
+		prio, _ := tc.Input["priority"].(string)
+		res, err := h.AE.AddBacklogItem(ctx, employeeID, companyID, title, desc, prio)
+		if err != nil {
+			return errResult(err)
+		}
+		return result(res)
+
+	case "SendMessageToAE":
+		role, _ := tc.Input["target_role"].(string)
+		msg, _ := tc.Input["message"].(string)
+		res, err := h.AE.SendMessageToRole(ctx, employeeID, companyID, role, msg)
+		if err != nil {
+			return errResult(err)
+		}
+		return result(res)
+
+	case "SearchMemories":
+		query, _ := tc.Input["query"].(string)
+		mems, err := h.AE.SearchMemoriesForEmployee(ctx, employeeID, query)
+		if err != nil {
+			return errResult(err)
+		}
+		return result(map[string]any{"memories": mems, "count": len(mems)})
 
 	default:
 		return llm.ToolResult{ToolUseID: tc.ID, Content: fmt.Sprintf("Unknown tool: %s", tc.Name), IsError: true}

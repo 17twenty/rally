@@ -52,6 +52,27 @@ func (q *Queries) GetCompanyPolicy(ctx context.Context, id string) (string, erro
 	return policy_doc, err
 }
 
+const getFirstActiveCompany = `-- name: GetFirstActiveCompany :one
+SELECT id, name, mission, status, created_at, policy_doc, slack_team_id, slack_team_name, slack_bot_user_id FROM companies WHERE status = 'active' ORDER BY created_at LIMIT 1
+`
+
+func (q *Queries) GetFirstActiveCompany(ctx context.Context) (Company, error) {
+	row := q.db.QueryRow(ctx, getFirstActiveCompany)
+	var i Company
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Mission,
+		&i.Status,
+		&i.CreatedAt,
+		&i.PolicyDoc,
+		&i.SlackTeamID,
+		&i.SlackTeamName,
+		&i.SlackBotUserID,
+	)
+	return i, err
+}
+
 const insertCompany = `-- name: InsertCompany :one
 INSERT INTO companies (id, name, mission, status)
 VALUES ($1, $2, $3, $4)

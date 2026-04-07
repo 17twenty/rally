@@ -49,12 +49,19 @@ tasks:
         echo "Starting PostgreSQL container '{{.APP_NAME}}-db'..."
         echo "  USER=$user  DB=$db  PORT=$port"
 
+        # Create volume if it doesn't exist
+        docker volume create {{.APP_NAME}}-db-data 2>/dev/null || true
+
+        # Remove stopped container if it exists (but keep the volume)
+        docker rm {{.APP_NAME}}-db 2>/dev/null || true
+
         docker run --name {{.APP_NAME}}-db \
-          -d --rm \
+          -d \
           -e POSTGRES_USER="$user" \
           -e POSTGRES_PASSWORD="$password" \
           -e POSTGRES_DB="$db" \
           -p "$port:5432" \
+          -v {{.APP_NAME}}-db-data:/var/lib/postgresql/data \
           postgres:latest
 
         # Wait for postgres to be ready
