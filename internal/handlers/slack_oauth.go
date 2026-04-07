@@ -12,6 +12,9 @@ import (
 
 	"github.com/17twenty/rally/internal/db"
 	"github.com/17twenty/rally/internal/db/dao"
+	"github.com/17twenty/rally/internal/domain"
+	"github.com/17twenty/rally/internal/org"
+	"github.com/17twenty/rally/internal/queue"
 	"github.com/17twenty/rally/internal/slack"
 	"github.com/17twenty/rally/internal/vault"
 )
@@ -131,6 +134,53 @@ func (h *SlackOAuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request
 		newClient := slack.NewClient(token.AccessToken)
 		*h.SlackClient = newClient
 		slog.Info("slack oauth: SlackClient hot-swapped")
+	}
+
+	// Slack is now connected — kick off CEO hiring if no AEs exist yet.
+	// This is the trigger: setup creates the company, OAuth connects Slack, then we hire.
+	if h.DB != nil && queue.Client != nil {
+		var coID string
+		if companies, listErr := h.q().ListCompanies(r.Context()); listErr == nil && len(companies) > 0 {
+			coID = companies[len(companies)-1].ID
+		}
+		if coID != "" {
+			// Only hire if no AEs exist (prevents re-triggering on Slack reconnect).
+			employees, _ := h.q().ListEmployeesByCompany(r.Context(), coID)
+			hasAE := false
+			for _, emp := range employees {
+				if emp.Type == "ae" {
+					hasAE = true
+					break
+				}
+			}
+			if !hasAE {
+				// Find the company and humans for DesignOrg.
+				if company, cErr := h.q().GetCompany(r.Context(), coID); cErr == nil {
+					var humans []domain.Employee
+					for _, emp := range employees {
+						humans = append(humans, domain.Employee{
+							ID: emp.ID, CompanyID: emp.CompanyID,
+							Name: db.Deref(emp.Name), Role: emp.Role,
+							Type: emp.Type, Status: emp.Status,
+						})
+					}
+					mgr := org.NewOrgManager()
+					co := domain.Company{ID: coID, Name: company.Name, Mission: db.Deref(company.Mission)}
+					if plan, designErr := mgr.DesignOrg(co, humans); designErr == nil {
+						for _, role := range plan.Roles {
+							_, _ = queue.Client.Insert(r.Context(), queue.HiringJobArgs{
+								CompanyID:  coID,
+								PlanRoleID: role.ID,
+								Role:       role.Role,
+								Department: role.Department,
+								ReportsTo:  role.ReportsTo,
+							}, nil)
+						}
+						slog.Info("slack oauth: CEO hiring triggered", "company", company.Name)
+					}
+				}
+			}
+		}
 	}
 
 	// Redirect to setup/dashboard with success message.

@@ -42,25 +42,31 @@ func (c *OpenAISDKClient) Complete(ctx context.Context, messages []Message, mode
 		}
 	}
 
-	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+	// Use streaming for all calls — vLLM's non-streaming endpoint is unreliable.
+	stream := c.client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
 		Model:     model,
 		Messages:  msgs,
 		MaxTokens: openai.Int(int64(maxTokens)),
 	})
-	if err != nil {
+
+	acc := openai.ChatCompletionAccumulator{}
+	for stream.Next() {
+		acc.AddChunk(stream.Current())
+	}
+	if err := stream.Err(); err != nil {
 		return CompletionResult{}, fmt.Errorf("openai sdk: %w", err)
 	}
 
 	text := ""
-	if len(resp.Choices) > 0 {
-		text = resp.Choices[0].Message.Content
+	if len(acc.Choices) > 0 {
+		text = acc.Choices[0].Message.Content
 	}
 
 	return CompletionResult{
 		Text: text,
 		Usage: Usage{
-			InputTokens:  int(resp.Usage.PromptTokens),
-			OutputTokens: int(resp.Usage.CompletionTokens),
+			InputTokens:  int(acc.Usage.PromptTokens),
+			OutputTokens: int(acc.Usage.CompletionTokens),
 		},
 	}, nil
 }

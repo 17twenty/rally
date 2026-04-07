@@ -148,6 +148,62 @@ func (q *Queries) GetUnprocessedSlackEvents(ctx context.Context, arg GetUnproces
 	return items, nil
 }
 
+const getUnprocessedSlackMessagesExcludingBot = `-- name: GetUnprocessedSlackMessagesExcludingBot :many
+SELECT id, event_type, COALESCE(channel,'') as channel, COALESCE(user_id,'') as user_id,
+       COALESCE(text,'') as text, COALESCE(thread_ts,'') as thread_ts, COALESCE(message_ts,'') as message_ts
+FROM slack_events
+WHERE company_id = $1
+  AND processed_at IS NULL
+  AND event_type IN ('message', 'app_mention')
+  AND (user_id IS NULL OR user_id != $2)
+ORDER BY created_at ASC
+LIMIT $3
+`
+
+type GetUnprocessedSlackMessagesExcludingBotParams struct {
+	CompanyID string  `json:"company_id"`
+	UserID    *string `json:"user_id"`
+	Limit     int32   `json:"limit"`
+}
+
+type GetUnprocessedSlackMessagesExcludingBotRow struct {
+	ID        string `json:"id"`
+	EventType string `json:"event_type"`
+	Channel   string `json:"channel"`
+	UserID    string `json:"user_id"`
+	Text      string `json:"text"`
+	ThreadTs  string `json:"thread_ts"`
+	MessageTs string `json:"message_ts"`
+}
+
+func (q *Queries) GetUnprocessedSlackMessagesExcludingBot(ctx context.Context, arg GetUnprocessedSlackMessagesExcludingBotParams) ([]GetUnprocessedSlackMessagesExcludingBotRow, error) {
+	rows, err := q.db.Query(ctx, getUnprocessedSlackMessagesExcludingBot, arg.CompanyID, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetUnprocessedSlackMessagesExcludingBotRow{}
+	for rows.Next() {
+		var i GetUnprocessedSlackMessagesExcludingBotRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.EventType,
+			&i.Channel,
+			&i.UserID,
+			&i.Text,
+			&i.ThreadTs,
+			&i.MessageTs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertSlackEvent = `-- name: InsertSlackEvent :one
 INSERT INTO slack_events (id, company_id, event_type, channel, user_id, thread_ts, message_ts, payload, text)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

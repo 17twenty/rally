@@ -81,7 +81,7 @@ func (m *OrgManager) GenerateEmployeeConfig(plan *OrgPlan, role PlannedRole) *do
 	cfg.Employee.ReportsTo = role.ReportsTo
 	// DefaultModelRef is set by the hiring flow from LLM router config
 	cfg.Cognition.Routing = map[string]string{}
-	cfg.Runtime.HeartbeatSeconds = 300
+	cfg.Runtime.HeartbeatSeconds = 60 // overridden by HEARTBEAT_SECONDS env in hiring flow
 	// All AEs get full tool access — they're treated as real employees.
 	// Credentials (Google OAuth, Figma tokens) still need to be provisioned
 	// separately, but tool access is unrestricted.

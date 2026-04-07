@@ -63,8 +63,8 @@ func TestGenerateEmployeeConfig_FullToolAccess(t *testing.T) {
 
 	cfg := m.GenerateEmployeeConfig(plan, role)
 
-	if cfg.Runtime.HeartbeatSeconds != 300 {
-		t.Errorf("heartbeat = %d, want 300", cfg.Runtime.HeartbeatSeconds)
+	if cfg.Runtime.HeartbeatSeconds != 60 {
+		t.Errorf("heartbeat = %d, want 60", cfg.Runtime.HeartbeatSeconds)
 	}
 
 	// All AEs should have full tool access.

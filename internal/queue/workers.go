@@ -278,10 +278,14 @@ func (w *HiringWorker) Work(ctx context.Context, job *river.Job[HiringJobArgs]) 
 		return fmt.Errorf("load company %s: %w", job.Args.CompanyID, err)
 	}
 
-	// Construct Slack client from env if available
+	// Load Slack token from vault via sqlc.
 	var slackClient *slack.SlackClient
-	if token := os.Getenv("SLACK_BOT_TOKEN"); token != "" {
-		slackClient = slack.NewClient(token)
+	q := dao.New(w.DB)
+	companyIDRef := job.Args.CompanyID
+	if tokenPtr, tokenErr := q.GetActiveProviderToken(ctx, dao.GetActiveProviderTokenParams{
+		CompanyID: &companyIDRef, ProviderName: "slack",
+	}); tokenErr == nil && tokenPtr != nil && *tokenPtr != "" {
+		slackClient = slack.NewClient(*tokenPtr)
 	}
 
 	hirer := &hiring.Hirer{
@@ -313,7 +317,6 @@ func (w *HiringWorker) Work(ctx context.Context, job *river.Job[HiringJobArgs]) 
 	}
 
 	// Mark the proposed hire as completed so the CEO stops nagging about it.
-	q := dao.New(w.DB)
 	if markErr := q.MarkProposedHireComplete(ctx, dao.MarkProposedHireCompleteParams{
 		CompanyID: job.Args.CompanyID,
 		Role:      job.Args.Role,

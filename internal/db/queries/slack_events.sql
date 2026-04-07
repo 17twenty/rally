@@ -20,5 +20,16 @@ WHERE company_id = $1
 ORDER BY created_at ASC
 LIMIT $3;
 
+-- name: GetUnprocessedSlackMessagesExcludingBot :many
+SELECT id, event_type, COALESCE(channel,'') as channel, COALESCE(user_id,'') as user_id,
+       COALESCE(text,'') as text, COALESCE(thread_ts,'') as thread_ts, COALESCE(message_ts,'') as message_ts
+FROM slack_events
+WHERE company_id = $1
+  AND processed_at IS NULL
+  AND event_type IN ('message', 'app_mention')
+  AND (user_id IS NULL OR user_id != $2)
+ORDER BY created_at ASC
+LIMIT $3;
+
 -- name: MarkSlackEventProcessed :exec
 UPDATE slack_events SET processed_at = NOW() WHERE id = $1;

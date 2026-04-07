@@ -23,6 +23,7 @@ type AgentCycle struct {
 	RemoteToolDefs []RemoteToolDef  // tools available via Rally gateway
 	CycleCount     int              // incremented each heartbeat
 	ScratchPath    string           // /home/ae/scratch — for session state persistence
+	LastSlackTS    string           // high-water mark: last Slack message_ts seen
 }
 
 // Run executes a single heartbeat cycle.
@@ -41,16 +42,41 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 	defer cancel()
 	_ = parentCtx // used for reflection after tool loop
 
+	// Load persisted high-water mark if we don't have one yet (e.g. container restart).
+	if c.LastSlackTS == "" {
+		if ts, err := os.ReadFile(filepath.Join(c.ScratchPath, ".slack_hwm")); err == nil {
+			c.LastSlackTS = strings.TrimSpace(string(ts))
+		}
+	}
+
 	// 1. Gather all context.
-	slog.Info("cycle: observe")
-	obs, err := c.Rally.FetchObservations(ctx)
+	slog.Info("cycle: observe", "slack_since", c.LastSlackTS)
+	obs, err := c.Rally.FetchObservations(ctx, c.LastSlackTS)
 	if err != nil {
 		return fmt.Errorf("observe: %w", err)
 	}
 
+	// Advance the high-water mark to the latest new Slack event.
+	for _, evt := range obs.SlackEvents {
+		if evt.TS > c.LastSlackTS {
+			c.LastSlackTS = evt.TS
+		}
+	}
+	// Persist so it survives container restarts.
+	if c.LastSlackTS != "" {
+		_ = os.WriteFile(filepath.Join(c.ScratchPath, ".slack_hwm"), []byte(c.LastSlackTS), 0o644)
+	}
+
 	// Skip the LLM entirely if there's nothing to act on.
-	// This prevents the model from posting unsolicited status updates to Slack.
-	hasWork := len(obs.SlackEvents) > 0 || len(obs.Tasks) > 0 ||
+	// Filter out this AE's own Slack messages from the "new" count.
+	myPrefix := "*" + c.AEName + ":*"
+	newSlackCount := 0
+	for _, evt := range obs.SlackEvents {
+		if !strings.HasPrefix(evt.Text, myPrefix) {
+			newSlackCount++
+		}
+	}
+	hasWork := newSlackCount > 0 || len(obs.Tasks) > 0 ||
 		len(obs.Messages) > 0
 	// Also act if we have active work items (todo, in_progress, or blocked).
 	for _, wi := range obs.WorkItems {
@@ -324,8 +350,7 @@ You are an AI employee. You take action — you don't schedule meetings or prete
 - ProposeHire: CEO only — propose new team members
 
 ### Important
-- If a hire proposal no longer appears in your observations, it has been handled (approved + hired, or rejected). Do NOT follow up on it.
-- If you need credentials or access you don't have, add a BacklogItem as blocked with a note about what you need. Do NOT repeatedly escalate or message about the same missing credential — escalate ONCE, then move on to other work.
+- If you need credentials or access you don't have, add a BacklogItem as blocked with a note about what you need. Escalate ONCE, then move on to other work.
 - RecallMemory: search your stored memories for past decisions and context.
 `)
 
@@ -370,14 +395,35 @@ func (c *AgentCycle) buildSituation(obs *Observations) string {
 		sb.WriteString("\n")
 	}
 
-	// Slack messages — shown with full text. Rally is the Slack gateway.
-	if len(obs.SlackEvents) > 0 {
-		sb.WriteString("### Slack Messages\n")
-		for _, evt := range obs.SlackEvents {
+	// Slack — split into context (already seen) and new (act on these).
+	// Filter out this AE's own messages (prefixed with *Name:*).
+	myPrefix := "*" + c.AEName + ":*"
+
+	var contextMsgs, newMsgs []SlackEventObs
+	for _, evt := range obs.SlackContext {
+		if !strings.HasPrefix(evt.Text, myPrefix) {
+			contextMsgs = append(contextMsgs, evt)
+		}
+	}
+	for _, evt := range obs.SlackEvents {
+		if !strings.HasPrefix(evt.Text, myPrefix) {
+			newMsgs = append(newMsgs, evt)
+		}
+	}
+
+	if len(contextMsgs) > 0 {
+		sb.WriteString("### Recent Slack (already seen — for context only, do NOT reply to these)\n")
+		for _, evt := range contextMsgs {
 			sb.WriteString(fmt.Sprintf("- %s in %s: \"%s\"\n", evt.UserID, evt.Channel, evt.Text))
 		}
-		// Tell the AE to reply to the SAME channel the messages came from.
-		lastChannel := obs.SlackEvents[len(obs.SlackEvents)-1].Channel
+		sb.WriteString("\n")
+	}
+	if len(newMsgs) > 0 {
+		sb.WriteString("### NEW Slack Messages (respond to these)\n")
+		for _, evt := range newMsgs {
+			sb.WriteString(fmt.Sprintf("- %s in %s: \"%s\"\n", evt.UserID, evt.Channel, evt.Text))
+		}
+		lastChannel := newMsgs[len(newMsgs)-1].Channel
 		sb.WriteString(fmt.Sprintf("Reply using SlackSend with channel=\"%s\" to respond in the same conversation.\n\n", lastChannel))
 	}
 
@@ -402,10 +448,16 @@ func (c *AgentCycle) buildSituation(obs *Observations) string {
 	// If truly nothing is happening.
 	if len(obs.Tasks) == 0 && len(obs.SlackEvents) == 0 && len(obs.Messages) == 0 &&
 		len(obs.WorkItems) == 0 {
-		sb.WriteString("No new tasks, messages, or work items. Review your team and company state. If everything is in order, respond with a brief status update.\n")
+		sb.WriteString("Nothing new to act on. End this cycle silently.\n")
 	}
 
-	sb.WriteString("\nWhat should you do? Use your tools to take action.")
+	sb.WriteString(`
+### Before you act
+1. Look at your team roster, your backlog, and what's new.
+2. Has anything changed that resolves an open item? (e.g. a hire completed, a task was done by someone else) If so, mark those items done first.
+3. Then focus on what's genuinely new — new Slack messages, new tasks, unfinished work.
+4. If nothing is new and no items need attention, end the cycle silently. Do NOT post to Slack.
+`)
 	return sb.String()
 }
 
@@ -506,6 +558,10 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 		if channel == "" {
 			channel = "#general"
 		}
+		// Strip duplicate name prefix if the model already included it.
+		text = strings.TrimPrefix(text, c.AEName+": ")
+		text = strings.TrimPrefix(text, c.AEName+":* ")
+		text = strings.TrimPrefix(text, "*"+c.AEName+":* ")
 		err := c.Rally.SendSlack(ctx, channel, fmt.Sprintf("*%s:* %s", c.AEName, text))
 		if err != nil {
 			resultContent = fmt.Sprintf("Error: %s", err.Error())

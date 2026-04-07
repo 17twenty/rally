@@ -127,53 +127,46 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 		Status      string `json:"status"`
 	}
 
-	// Fetch recent Slack messages, excluding bot's own messages.
-	// Rally is the Slack gateway — AEs see message text directly from the DB.
+	// Fetch Slack messages, split into "new" and "context" based on the AE's
+	// last-seen timestamp. The AE sends ?slack_since=<ts> to indicate when it
+	// last checked. Events after that are "new" (act on these). Events before
+	// are "context" (for continuity, don't re-act).
+	//
+	// We include bot messages so AEs can see each other's Slack posts.
+	// The AE name is included so the client can filter out its own messages.
 	var slackEvents []slackEventObs
-	botUserID := ""
-	if c, cErr := h.q().GetCompany(ctx, companyID); cErr == nil {
-		botUserID = db.Deref(c.SlackBotUserID)
-	}
-	// Use bot-filtered query only if we have a real bot user ID.
-	// Otherwise fall back to unfiltered recent events.
-	var daoEvents []dao.GetRecentSlackMessagesExcludingBotRow
-	var slackErr error
-	if botUserID != "" {
-		daoEvents, slackErr = h.q().GetRecentSlackMessagesExcludingBot(ctx, dao.GetRecentSlackMessagesExcludingBotParams{
-			CompanyID: companyID, UserID: &botUserID, Limit: 10,
-		})
-	} else {
-		allEvents, allErr := h.q().GetRecentSlackEvents(ctx, dao.GetRecentSlackEventsParams{
-			CompanyID: companyID, Limit: 10,
-		})
-		if allErr == nil {
-			for _, e := range allEvents {
-				daoEvents = append(daoEvents, dao.GetRecentSlackMessagesExcludingBotRow{
-					ID: e.ID, EventType: e.EventType, Channel: db.Deref(e.Channel),
-					UserID: db.Deref(e.UserID), Text: db.Deref(e.Text),
-					ThreadTs: db.Deref(e.ThreadTs), MessageTs: db.Deref(e.MessageTs),
-				})
-			}
-		}
-		slackErr = allErr
-	}
+	var slackContext []slackEventObs
+	slackSince := r.URL.Query().Get("slack_since")
+
+	allEvents, slackErr := h.q().GetRecentSlackEvents(ctx, dao.GetRecentSlackEventsParams{
+		CompanyID: companyID, Limit: 20,
+	})
 	if slackErr == nil {
-		// Resolve Slack IDs to human-readable names.
 		h.ensureSlackClient(ctx)
-		for _, e := range daoEvents {
-			userName := e.UserID
-			channelName := e.Channel
-			if h.SlackClient != nil {
-				userName = h.SlackClient.ResolveUserName(ctx, e.UserID)
-				channelName = h.SlackClient.ResolveChannelName(ctx, e.Channel)
+		for _, e := range allEvents {
+			text := db.Deref(e.Text)
+			if text == "" {
+				continue
 			}
-			slackEvents = append(slackEvents, slackEventObs{
+			userName := db.Deref(e.UserID)
+			channelName := db.Deref(e.Channel)
+			messageTs := db.Deref(e.MessageTs)
+			if h.SlackClient != nil {
+				userName = h.SlackClient.ResolveUserName(ctx, db.Deref(e.UserID))
+				channelName = h.SlackClient.ResolveChannelName(ctx, db.Deref(e.Channel))
+			}
+			obs := slackEventObs{
 				Channel:  channelName,
 				UserID:   userName,
-				Text:     e.Text,
-				ThreadTS: e.ThreadTs,
-				TS:       e.MessageTs,
-			})
+				Text:     text,
+				ThreadTS: db.Deref(e.ThreadTs),
+				TS:       messageTs,
+			}
+			if slackSince == "" || messageTs > slackSince {
+				slackEvents = append(slackEvents, obs)
+			} else {
+				slackContext = append(slackContext, obs)
+			}
 		}
 	}
 
@@ -305,6 +298,7 @@ func (h *AEAPIHandler) Observations(w http.ResponseWriter, r *http.Request) {
 		"model_ref":      modelRef,
 		"soul_md":        soulMD,
 		"slack_events":   slackEvents,
+		"slack_context":  slackContext,
 		"memories":       memories,
 		"tasks":          tasks,
 		"work_items":     workItems,

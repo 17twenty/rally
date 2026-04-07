@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,7 +72,7 @@ func (h *Hirer) HireAE(ctx context.Context, companyID string, plan org.PlannedRo
 	cfg.Identity.SoulFile = soulMD
 	cfg.Cognition.DefaultModelRef = h.LLMRouter.DefaultModel()
 	cfg.Cognition.Routing = map[string]string{}
-	cfg.Runtime.HeartbeatSeconds = 300
+	cfg.Runtime.HeartbeatSeconds = heartbeatSecondsFromEnv()
 	cfg.Tools = map[string]bool{
 		"slack":            true,
 		"github":           true,
@@ -174,14 +176,42 @@ func (h *Hirer) HireAE(ctx context.Context, companyID string, plan org.PlannedRo
 	// 7. Provision Slack channels and post introduction
 	if h.SlackClient != nil {
 		if err := slack.EnsureDefaultChannels(ctx, h.SlackClient); err != nil {
-			// Non-fatal: log but continue
-			_ = err
+			slog.Warn("hiring: EnsureDefaultChannels failed", "err", err)
 		}
 
-		// 6. Generate and post an in-character introduction using the AE's soul/personality.
+		// Find the first public channel to announce in.
+		// Prefer #general, fall back to first available channel.
+		announceChannel := "#general"
+		if channels, chErr := h.SlackClient.ListChannels(ctx); chErr == nil {
+			for _, ch := range channels {
+				if ch.Name == "general" {
+					announceChannel = ch.ID
+					break
+				}
+			}
+			// No #general — use the first public channel.
+			if announceChannel == "#general" && len(channels) > 0 {
+				announceChannel = channels[0].ID
+				slog.Info("hiring: no #general channel, using first available", "channel", channels[0].Name)
+			}
+		}
+
+		// Rally (system) announces the hire.
+		if _, postErr := h.SlackClient.PostMessage(ctx, announceChannel,
+			fmt.Sprintf(":wave: Welcome *%s* to the team! They're online and ready to work.", displayName)); postErr != nil {
+			slog.Warn("hiring: failed to post welcome announcement", "channel", announceChannel, "err", postErr)
+		} else {
+			slog.Info("hiring: welcome announcement posted", "name", displayName, "channel", announceChannel)
+		}
+
+		// AE introduces themselves in-character.
 		introMsg := generateIntroMessage(ctx, h.LLMRouter, aeName, plan.Role, company.Name, soulMD)
-		_, _ = h.SlackClient.PostMessage(ctx, "#general",
-			fmt.Sprintf("[%s-AE] %s", plan.Role, introMsg))
+		if _, postErr := h.SlackClient.PostMessage(ctx, announceChannel,
+			fmt.Sprintf("*%s:* %s", aeName, introMsg)); postErr != nil {
+			slog.Warn("hiring: failed to post AE intro", "err", postErr)
+		}
+	} else {
+		slog.Info("hiring: Slack not connected, announcement will be posted when Slack connects", "name", displayName)
 	}
 
 	// 7. Return created Employee
@@ -222,4 +252,15 @@ func nullableString(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// heartbeatSecondsFromEnv reads HEARTBEAT_SECONDS from the server env.
+// Defaults to 60 if not set.
+func heartbeatSecondsFromEnv() int {
+	if s := os.Getenv("HEARTBEAT_SECONDS"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			return v
+		}
+	}
+	return 60
 }

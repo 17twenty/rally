@@ -3,6 +3,7 @@ package hiring
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/17twenty/rally/internal/llm"
@@ -75,7 +76,23 @@ Keep it under 200 words. No fake human biography. This is an AI employee who use
 
 	result, err := router.Complete(ctx, router.DefaultModel(), systemPrompt, userPrompt, 1000)
 	if err != nil {
-		return "", fmt.Errorf("generate soul.md for %s: %w", role, err)
+		slog.Warn("soul.md generation failed, using fallback template", "role", role, "err", err)
+		return fallbackSoulMD(name, role, companyName, mission), nil
+	}
+	if strings.TrimSpace(result) == "" {
+		slog.Warn("soul.md generation returned empty, using fallback template", "role", role)
+		return fallbackSoulMD(name, role, companyName, mission), nil
 	}
 	return result, nil
+}
+
+func fallbackSoulMD(name, role, companyName, mission string) string {
+	return fmt.Sprintf(`# %s — %s at %s
+
+%s approaches work as the %s with a bias for action. Ship working code, not plans. Every task gets broken down, tracked, and completed.
+
+Communication is direct and concise. No corporate fluff, no status spam. Post results, not progress updates. Ask clear questions when blocked, escalate once, then move on to other work.
+
+What matters: delivering value for %s's mission — %s. Quality over quantity. Help teammates succeed. Be honest about being an AI — that's a feature, not a bug.`,
+		name, role, companyName, name, role, companyName, mission)
 }

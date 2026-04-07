@@ -9,8 +9,6 @@ import (
 	"github.com/17twenty/rally/internal/db/dao"
 	"github.com/17twenty/rally/internal/domain"
 	"github.com/17twenty/rally/internal/kb"
-	"github.com/17twenty/rally/internal/org"
-	"github.com/17twenty/rally/internal/queue"
 	"github.com/17twenty/rally/internal/vault"
 	"github.com/17twenty/rally/templates/pages"
 	"github.com/a-h/templ"
@@ -137,32 +135,8 @@ func (h *SetupHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Design org and enqueue hiring jobs.
-	if queue.Client != nil {
-		company := domain.Company{ID: companyID, Name: companyName, Mission: mission}
-		founder := domain.Employee{
-			ID:          founderID,
-			CompanyID:   companyID,
-			Name:        founderName,
-			Role:        founderRole,
-			Type:        "human",
-			Status:      "active",
-			SlackUserID: founderSlackID,
-		}
-
-		mgr := org.NewOrgManager()
-		if plan, designErr := mgr.DesignOrg(company, []domain.Employee{founder}); designErr == nil {
-			for _, role := range plan.Roles {
-				_, _ = queue.Client.Insert(ctx, queue.HiringJobArgs{
-					CompanyID:  companyID,
-					PlanRoleID: role.ID,
-					Role:       role.Role,
-					Department: role.Department,
-					ReportsTo:  role.ReportsTo,
-				}, nil)
-			}
-		}
-	}
+	// 3. CEO hiring is triggered after Slack is connected (see slack_oauth.go).
+	// This ensures the CEO can announce themselves in Slack on day one.
 
 	// 4. If github_token provided, store speculatively in vault by role placeholder.
 	if githubToken != "" && h.Vault != nil {

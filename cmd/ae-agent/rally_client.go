@@ -88,6 +88,7 @@ type Observations struct {
 	ModelRef      string            `json:"model_ref"`  // server-side model override
 	SoulMD        string            `json:"soul_md"`    // identity from DB (single source of truth)
 	SlackEvents   []SlackEventObs   `json:"slack_events"`
+	SlackContext  []SlackEventObs   `json:"slack_context"`
 	Memories      []MemoryObs       `json:"memories"`
 	Tasks         []TaskObs         `json:"tasks"`
 	WorkItems     []WorkItemObs     `json:"work_items"`
@@ -156,8 +157,12 @@ type TaskObs struct {
 }
 
 // FetchObservations retrieves current observations for this AE.
-func (c *RallyClient) FetchObservations(ctx context.Context) (*Observations, error) {
-	data, err := c.do(ctx, "GET", fmt.Sprintf("/api/ae/observations?employee_id=%s", c.employeeID), nil)
+func (c *RallyClient) FetchObservations(ctx context.Context, slackSince string) (*Observations, error) {
+	url := fmt.Sprintf("/api/ae/observations?employee_id=%s", c.employeeID)
+	if slackSince != "" {
+		url += "&slack_since=" + slackSince
+	}
+	data, err := c.do(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
