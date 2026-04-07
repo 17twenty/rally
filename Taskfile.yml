@@ -166,6 +166,7 @@ tasks:
           DELETE FROM workspace_files;
           DELETE FROM companies;
         "
+      - rm -rf {{.RALLY_WORKSPACE_ROOT:-".workspaces"}}/*
       - echo "All data nuked. Visit /setup to start fresh."
 
   test:
