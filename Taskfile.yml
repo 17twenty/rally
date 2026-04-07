@@ -139,6 +139,9 @@ tasks:
   nuke:
     desc: "Destroy all data and AE containers (DESTRUCTIVE — starts fresh)"
     prompt: "This will DELETE all companies, employees, tasks, and work items. Are you sure?"
+    preconditions:
+      - sh: docker exec {{.APP_NAME}}-db pg_isready -U rally > /dev/null 2>&1
+        msg: "Database not running. Run 'task db-start' first."
     cmds:
       - docker ps -q --filter "label=rally.employee_id" | xargs -r docker stop
       - docker ps -aq --filter "label=rally.employee_id" | xargs -r docker rm
@@ -166,7 +169,7 @@ tasks:
           DELETE FROM workspace_files;
           DELETE FROM companies;
         "
-      - rm -rf {{.RALLY_WORKSPACE_ROOT:-".workspaces"}}/*
+      - rm -rf .workspaces/*/
       - echo "All data nuked. Visit /setup to start fresh."
 
   test:
