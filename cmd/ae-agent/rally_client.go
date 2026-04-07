@@ -284,6 +284,14 @@ func (c *RallyClient) ListCredentials(ctx context.Context) ([]byte, error) {
 	return c.do(ctx, "GET", "/api/ae/credentials", nil)
 }
 
+// StoreCredential saves a credential to Rally's vault.
+func (c *RallyClient) StoreCredential(ctx context.Context, provider, token, accessType string, scopes []string) error {
+	_, err := c.do(ctx, "POST", "/api/ae/credentials", map[string]any{
+		"provider": provider, "token": token, "access_type": accessType, "scopes": scopes,
+	})
+	return err
+}
+
 // FetchCredential retrieves a credential from Rally's vault.
 func (c *RallyClient) FetchCredential(ctx context.Context, provider string) (string, error) {
 	data, err := c.do(ctx, "GET", fmt.Sprintf("/api/ae/credentials/%s", provider), nil)

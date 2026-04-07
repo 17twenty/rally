@@ -536,34 +536,51 @@ func (h *AEAPIHandler) SubmitLog(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListCredentials handles GET /api/ae/credentials — returns available providers (no tokens).
+// Returns both the AE's own credentials AND company-wide credentials.
 func (h *AEAPIHandler) ListCredentials(w http.ResponseWriter, r *http.Request) {
 	employeeID := r.Header.Get("X-AE-Employee-ID")
-
-	if h.Vault == nil {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"credentials": []any{}})
-		return
-	}
-
-	creds, err := h.Vault.List(r.Context(), employeeID)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"credentials": []any{}})
-		return
-	}
+	companyID := r.Header.Get("X-AE-Company-ID")
 
 	type credInfo struct {
 		Provider   string   `json:"provider"`
 		AccessType string   `json:"access_type"`
 		Scopes     []string `json:"scopes"`
 		Status     string   `json:"status"`
+		Scope      string   `json:"scope"` // "personal" or "company"
 	}
+
+	if h.Vault == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"credentials": []credInfo{}})
+		return
+	}
+
+	seen := map[string]bool{}
 	var result []credInfo
-	for _, c := range creds {
-		result = append(result, credInfo{
-			Provider: c.ProviderName, AccessType: c.AccessType,
-			Scopes: c.Scopes, Status: c.Status,
-		})
+
+	// AE's own credentials.
+	if own, err := h.Vault.List(r.Context(), employeeID); err == nil {
+		for _, c := range own {
+			result = append(result, credInfo{
+				Provider: c.ProviderName, AccessType: c.AccessType,
+				Scopes: c.Scopes, Status: c.Status, Scope: "personal",
+			})
+			seen[c.ProviderName] = true
+		}
+	}
+
+	// Company-wide credentials (shared across all AEs).
+	if companyID != "" {
+		if companyCreds, err := h.Vault.ListByCompany(r.Context(), companyID); err == nil {
+			for _, c := range companyCreds {
+				if !seen[c.ProviderName] {
+					result = append(result, credInfo{
+						Provider: c.ProviderName, AccessType: c.AccessType,
+						Scopes: c.Scopes, Status: c.Status, Scope: "company",
+					})
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -588,6 +605,44 @@ func (h *AEAPIHandler) FetchCredential(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
+}
+
+// StoreCredential handles POST /api/ae/credentials — lets AEs store their own credentials.
+func (h *AEAPIHandler) StoreCredential(w http.ResponseWriter, r *http.Request) {
+	employeeID := r.Header.Get("X-AE-Employee-ID")
+	companyID := r.Header.Get("X-AE-Company-ID")
+
+	if h.Vault == nil {
+		http.Error(w, `{"error":"vault not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Provider   string   `json:"provider"`
+		Token      string   `json:"token"`
+		AccessType string   `json:"access_type"`
+		Scopes     []string `json:"scopes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Provider == "" || req.Token == "" {
+		http.Error(w, `{"error":"provider and token are required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.AccessType == "" {
+		req.AccessType = "api"
+	}
+
+	if err := h.Vault.Store(r.Context(), companyID, employeeID, req.Provider, req.Token, req.AccessType, req.Scopes); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("ae_store_credential", "employee_id", employeeID, "provider", req.Provider)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "stored", "provider": req.Provider})
 }
 
 // ExecuteTool handles POST /api/ae/tools/execute — runs a tool via the ToolGateway.

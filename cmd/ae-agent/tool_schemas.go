@@ -315,6 +315,20 @@ func localToolDefs() []ToolDefinition {
 				"properties": map[string]any{},
 			},
 		},
+		{
+			Name:        "StoreCredential",
+			Description: "Store a credential (API token, OAuth token, etc) securely in the vault. Use this when someone gives you a token via Slack or a message. The credential will be available to you in future cycles.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"provider":    map[string]any{"type": "string", "description": "Provider name (e.g. github, google, figma)"},
+					"token":       map[string]any{"type": "string", "description": "The token or secret to store"},
+					"access_type": map[string]any{"type": "string", "description": "Type: api, oauth, or browser_session (default: api)"},
+					"scopes":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Permission scopes (e.g. repo, read:org)"},
+				},
+				"required": []string{"provider", "token"},
+			},
+		},
 		// --- Hiring ---
 		{
 			Name:        "ProposeHire",

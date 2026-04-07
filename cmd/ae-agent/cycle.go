@@ -117,7 +117,7 @@ func (c *AgentCycle) Run(ctx context.Context) error {
 		soul = c.SoulMD
 	}
 
-	systemPrompt := c.buildContext(ctx, obs, soul, sessionState)
+	systemPrompt := c.buildContext(obs, soul, sessionState)
 	userPrompt := c.buildSituation(obs)
 
 	messages := []ChatMessage{
@@ -257,7 +257,7 @@ Be specific and factual. This is your memory — it helps you maintain continuit
 // buildContext assembles the system prompt from the agent's full context.
 // This is the "who am I, where do I work, what am I doing" document.
 // The LLM makes all decisions from this context — no hardcoded logic.
-func (c *AgentCycle) buildContext(ctx context.Context, obs *Observations, soulMD, sessionState string) string {
+func (c *AgentCycle) buildContext(obs *Observations, soulMD, sessionState string) string {
 	var sb strings.Builder
 
 	// Identity.
@@ -275,27 +275,7 @@ func (c *AgentCycle) buildContext(ctx context.Context, obs *Observations, soulMD
 	sb.WriteString(fmt.Sprintf("- Heartbeat: cycle #%d\n", c.CycleCount))
 	sb.WriteString("- Workspace: /workspace (shared with all team members — clone repos here)\n")
 	sb.WriteString("- Scratch: /home/ae/scratch (your private working space)\n")
-
-	// Show available credentials so the AE knows what integrations it has.
-	if creds, err := c.Rally.ListCredentials(ctx); err == nil {
-		var credResult struct {
-			Credentials []struct {
-				Provider string `json:"provider"`
-				Status   string `json:"status"`
-			} `json:"credentials"`
-		}
-		if json.Unmarshal(creds, &credResult) == nil && len(credResult.Credentials) > 0 {
-			sb.WriteString("- Credentials: ")
-			for i, cr := range credResult.Credentials {
-				if i > 0 {
-					sb.WriteString(", ")
-				}
-				sb.WriteString(fmt.Sprintf("%s (%s)", cr.Provider, cr.Status))
-			}
-			sb.WriteString("\n")
-		}
-	}
-	sb.WriteString("\n")
+	sb.WriteString("- Use ListCredentials to check what integrations (GitHub, Google, etc) are available to you\n\n")
 
 	// Company policy.
 	if obs.PolicyDoc != "" {
@@ -723,6 +703,26 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 			isError = true
 		} else {
 			resultContent = string(data)
+		}
+
+	case "StoreCredential":
+		provider, _ := tc.Input["provider"].(string)
+		token, _ := tc.Input["token"].(string)
+		accessType, _ := tc.Input["access_type"].(string)
+		var scopes []string
+		if s, ok := tc.Input["scopes"].([]any); ok {
+			for _, v := range s {
+				if str, ok := v.(string); ok {
+					scopes = append(scopes, str)
+				}
+			}
+		}
+		err := c.Rally.StoreCredential(ctx, provider, token, accessType, scopes)
+		if err != nil {
+			resultContent = fmt.Sprintf("Error: %s", err.Error())
+			isError = true
+		} else {
+			resultContent = fmt.Sprintf(`{"status":"stored","provider":"%s"}`, provider)
 		}
 
 	// --- Hiring ---
