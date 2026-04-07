@@ -597,10 +597,25 @@ func (h *AEAPIHandler) FetchCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try the AE's own credentials first, then fall back to any company-wide credential.
 	token, err := h.Vault.Get(r.Context(), employeeID, provider)
 	if err != nil {
-		http.Error(w, `{"error":"credential not found"}`, http.StatusNotFound)
-		return
+		// Check company-wide: search all employees in this company for the same provider.
+		companyID := r.Header.Get("X-AE-Company-ID")
+		if companyID != "" {
+			if companyCreds, cErr := h.Vault.ListByCompany(r.Context(), companyID); cErr == nil {
+				for _, c := range companyCreds {
+					if c.ProviderName == provider && c.Status == "active" {
+						token, err = h.Vault.Get(r.Context(), c.EmployeeID, provider)
+						break
+					}
+				}
+			}
+		}
+		if err != nil || token == "" {
+			http.Error(w, `{"error":"credential not found"}`, http.StatusNotFound)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
