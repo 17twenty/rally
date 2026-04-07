@@ -35,13 +35,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Playwright + Chromium
 RUN npx -y playwright install --with-deps chromium
 
-# Install Google Workspace CLI
-RUN ARCH=$(dpkg --print-architecture) && \
-    curl -sL "https://github.com/googleworkspace/cli/releases/latest/download/gws_linux_${ARCH}" -o /usr/local/bin/gws && \
-    chmod +x /usr/local/bin/gws || echo "Google Workspace CLI not available for this arch"
+# Install Google API Python libraries for email/docs/drive
+RUN pip3 install --no-cache-dir \
+    google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
 # Create non-root user
 RUN useradd -m -s /bin/bash -u 1000 ae

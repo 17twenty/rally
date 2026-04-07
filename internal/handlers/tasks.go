@@ -273,3 +273,48 @@ func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 	http.Redirect(w, r, "/tasks/"+id, http.StatusSeeOther)
 }
+
+// UpdateWorkItemStatus handles POST /work-items/{id}/status.
+func (h *TaskHandler) UpdateWorkItemStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	status := r.FormValue("status")
+	if status == "" {
+		http.Error(w, "status required", http.StatusBadRequest)
+		return
+	}
+
+	if h.DB != nil {
+		// Get the owner to pass to UpdateWorkItemStatus.
+		wi, err := h.q().GetWorkItem(r.Context(), id)
+		if err != nil {
+			http.Error(w, "work item not found", http.StatusNotFound)
+			return
+		}
+		_ = h.q().UpdateWorkItemStatus(r.Context(), dao.UpdateWorkItemStatusParams{
+			ID: id, Status: status, OwnerID: wi.OwnerID,
+		})
+		_ = h.q().AddWorkItemHistory(r.Context(), dao.AddWorkItemHistoryParams{
+			ID: newID(), WorkItemID: id, ChangeType: "status_change", Content: &status,
+		})
+	}
+
+	http.Redirect(w, r, "/tasks", http.StatusSeeOther)
+}
+
+// DeleteWorkItem handles POST /work-items/{id}/delete.
+func (h *TaskHandler) DeleteWorkItem(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if h.DB != nil {
+		ctx := r.Context()
+		// Delete history first (FK), then item.
+		_, _ = h.DB.Pool.Exec(ctx, `DELETE FROM work_item_history WHERE work_item_id = $1`, id)
+		_, _ = h.DB.Pool.Exec(ctx, `DELETE FROM work_items WHERE id = $1`, id)
+	}
+
+	http.Redirect(w, r, "/tasks", http.StatusSeeOther)
+}

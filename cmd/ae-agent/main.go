@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	osexec "os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -87,6 +89,9 @@ func main() {
 		remoteToolDefs = defs
 		slog.Info("loaded remote tools", "count", len(remoteToolDefs))
 	}
+
+	// Configure credentials if available (git, gh, etc.)
+	setupCredentials(ctx, rally, aeName)
 
 	// Start health server
 	go startHealthServer()
@@ -169,4 +174,33 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// setupCredentials configures dev tools (git, gh) if credentials are available in the vault.
+func setupCredentials(ctx context.Context, rally *RallyClient, aeName string) {
+	// Configure git identity.
+	run("git", "config", "--global", "user.name", aeName+" (AE)")
+	run("git", "config", "--global", "user.email", strings.ToLower(strings.ReplaceAll(aeName, " ", ""))+"@rally.ae")
+
+	// Try to load GitHub token from vault.
+	token, err := rally.FetchCredential(ctx, "github")
+	if err != nil || token == "" {
+		slog.Info("credentials: no github token in vault")
+		return
+	}
+
+	// Configure git to use the token for HTTPS auth.
+	run("git", "config", "--global", "credential.helper", "store")
+	credFile := "/home/ae/.git-credentials"
+	_ = os.WriteFile(credFile, []byte("https://"+aeName+":"+token+"@github.com\n"), 0o600)
+	slog.Info("credentials: git configured with github token")
+
+	// Configure gh CLI.
+	_ = os.Setenv("GH_TOKEN", token)
+	slog.Info("credentials: gh CLI configured")
+}
+
+func run(name string, args ...string) {
+	cmd := osexec.Command(name, args...)
+	_ = cmd.Run()
 }

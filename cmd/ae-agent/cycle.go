@@ -558,10 +558,19 @@ func (c *AgentCycle) executeTool(ctx context.Context, tc ChatToolCall) ChatToolR
 		if channel == "" {
 			channel = "#general"
 		}
-		// Strip duplicate name prefix if the model already included it.
-		text = strings.TrimPrefix(text, c.AEName+": ")
-		text = strings.TrimPrefix(text, c.AEName+":* ")
-		text = strings.TrimPrefix(text, "*"+c.AEName+":* ")
+		// Strip any name prefix the model included — Rally adds the persona prefix.
+		// Handles: "Alex: ", "*Alex:* ", "Alex (CEO): ", "*Alex (CEO):* ", etc.
+		for _, prefix := range []string{
+			"*" + c.AEName + " (" + c.AERole + "):* ",
+			c.AEName + " (" + c.AERole + "): ",
+			"*" + c.AEName + ":* ",
+			c.AEName + ": ",
+		} {
+			if strings.HasPrefix(text, prefix) {
+				text = strings.TrimPrefix(text, prefix)
+				break
+			}
+		}
 		err := c.Rally.SendSlack(ctx, channel, fmt.Sprintf("*%s:* %s", c.AEName, text))
 		if err != nil {
 			resultContent = fmt.Sprintf("Error: %s", err.Error())

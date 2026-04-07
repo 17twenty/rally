@@ -136,6 +136,8 @@ func main() {
 	mux.HandleFunc("POST /tasks", th.Create)
 	mux.HandleFunc("GET /tasks/{id}", th.Show)
 	mux.HandleFunc("POST /tasks/{id}/status", th.UpdateStatus)
+	mux.HandleFunc("POST /work-items/{id}/status", th.UpdateWorkItemStatus)
+	mux.HandleFunc("POST /work-items/{id}/delete", th.DeleteWorkItem)
 
 	// KB routes
 	kbh := handlers.NewKBHandler(database)

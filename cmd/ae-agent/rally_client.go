@@ -279,6 +279,21 @@ func (c *RallyClient) SearchMemories(ctx context.Context, query string) ([]byte,
 	return c.do(ctx, "GET", fmt.Sprintf("/api/ae/memory/search?q=%s", query), nil)
 }
 
+// FetchCredential retrieves a credential from Rally's vault.
+func (c *RallyClient) FetchCredential(ctx context.Context, provider string) (string, error) {
+	data, err := c.do(ctx, "GET", fmt.Sprintf("/api/ae/credentials/%s", provider), nil)
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", err
+	}
+	return result.Token, nil
+}
+
 // SubmitLog records a tool execution log.
 func (c *RallyClient) SubmitLog(ctx context.Context, tool, action string, input, output map[string]any, success bool, traceID string) error {
 	_, err := c.do(ctx, "POST", "/api/ae/logs", map[string]any{
@@ -408,17 +423,3 @@ func (c *RallyClient) ListTeam(ctx context.Context) ([]byte, error) {
 	return c.do(ctx, "GET", "/api/ae/team", nil)
 }
 
-// FetchCredential retrieves a decrypted credential from Rally's vault.
-func (c *RallyClient) FetchCredential(ctx context.Context, provider string) (string, error) {
-	data, err := c.do(ctx, "GET", fmt.Sprintf("/api/ae/credentials/%s", provider), nil)
-	if err != nil {
-		return "", err
-	}
-	var resp struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return "", err
-	}
-	return resp.Token, nil
-}

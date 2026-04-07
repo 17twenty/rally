@@ -121,6 +121,7 @@ templ Tasks(data TasksPageData) {
 									@table.Head() { Status }
 									@table.Head() { Priority }
 									@table.Head() { Updated }
+									@table.Head() { Actions }
 								}
 							}
 							@table.Body() {
@@ -134,13 +135,29 @@ templ Tasks(data TasksPageData) {
 											<span class="text-xs text-muted-foreground ml-1">({ wi.OwnerRole })</span>
 										}
 										@table.Cell() {
-											@workItemStatusBadge(wi.Status)
+											<form method="POST" action={ templ.SafeURL("/work-items/" + wi.ID + "/status") } class="inline">
+												<select name="status" class="text-xs border rounded px-1 py-0.5 bg-background" onchange="this.form.submit()">
+													<option value="todo" selected?={ wi.Status == "todo" }>todo</option>
+													<option value="in_progress" selected?={ wi.Status == "in_progress" }>in progress</option>
+													<option value="blocked" selected?={ wi.Status == "blocked" }>blocked</option>
+													<option value="done" selected?={ wi.Status == "done" }>done</option>
+													<option value="cancelled" selected?={ wi.Status == "cancelled" }>cancelled</option>
+												</select>
+											</form>
 										}
 										@table.Cell() {
 											@workItemPriorityBadge(wi.Priority)
 										}
 										@table.Cell() {
 											<span class="text-sm text-muted-foreground">{ wi.UpdatedAt }</span>
+										}
+										@table.Cell() {
+											<form method="POST" action={ templ.SafeURL("/work-items/" + wi.ID + "/delete") } class="inline"
+												onsubmit="return confirm('Delete this work item?')">
+												@button.Button(button.Props{Type: button.TypeSubmit, Variant: button.VariantDestructive, Size: button.SizeSm}) {
+													Delete
+												}
+											</form>
 										}
 									}
 								}
